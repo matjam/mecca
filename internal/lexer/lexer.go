@@ -2,6 +2,8 @@ package lexer
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -13,176 +15,277 @@ type Token struct {
 	Column int
 }
 
-func (t Token) String() string {
-	return fmt.Sprintf("%v (%v:%v): \"%v\"", t.Type, t.Line, t.Column, t.Value)
+func jsonEscape(i string) string {
+	b, err := json.Marshal(i)
+	if err != nil {
+		panic(err)
+	}
+	s := string(b)
+	return s[1 : len(s)-1]
 }
 
-type Lexer struct {
-	input        *bufio.Reader
-	mode         int
-	line         int
-	column       int
-	currentToken *Token // the token that is currently being lexed
-	nextToken    *Token // a token that should be returned on the next call to NextToken()
+func (t Token) String() string {
+	return fmt.Sprintf("%v (line %v col %v): \"%v\"", t.Type, t.Line, t.Column, jsonEscape(t.Value))
 }
+
+type lexMode int
 
 const (
-	TEXT_MODE = iota
-	COMMAND_MODE
+	MODE_UNKNOWN lexMode = iota
+	MODE_TEXT
+	MODE_BRACKET_LITERAL
+	MODE_COMMAND
+	MODE_COMMAND_ARG
+	MODE_COMMAND_START
 )
 
+type Lexer struct {
+	input        *bufio.Reader // the raw input for the template
+	output       chan Token    // a channel holding the next available Token
+	buffer       string        // a buffer for the current token
+	bufferLine   int           // the line number where the buffer started
+	bufferColumn int           // the column number where the buffer started
+	mode         lexMode       // the current mode of the lexer
+	line         int           // the current line number
+	column       int           // the current column number
+	err          error         // the last error encountered
+}
+
 func NewLexer(r io.Reader) *Lexer {
-	return &Lexer{
-		input:  bufio.NewReader(r),
-		mode:   TEXT_MODE,
-		line:   1,
-		column: 1,
-	}
-}
-
-func (l *Lexer) emitCurrentToken() Token {
-	token := l.currentToken
-	l.currentToken = nil
-	return *token
-}
-
-func (l *Lexer) emitNextToken() Token {
-	token := l.nextToken
-	l.nextToken = nil
-	return *token
-}
-
-func (l *Lexer) NextToken() Token {
-	var err error
-	var finishedToken Token
-	var currentRune rune
-
-	// return a pending token that was already lexed
-	if l.nextToken != nil {
-		return l.emitNextToken()
+	l := &Lexer{
+		input:        bufio.NewReader(r),
+		output:       make(chan Token),
+		buffer:       "",
+		bufferLine:   1,
+		bufferColumn: 1,
+		mode:         MODE_UNKNOWN,
+		line:         1,
+		column:       1,
 	}
 
-	// read the runes from the input until we find the beginning of the next token.
-	// We then set the currentToken to the new token and return the token that was
-	// previously being lexed.
+	go func() {
+		l.process()
+	}()
+
+	return l
+}
+
+// Lex returns the next token from the input.
+func (l *Lexer) Lex() (Token, error) {
+	if l.err != nil {
+		return Token{}, l.err
+	}
+
+	t, ok := <-l.output
+	if !ok {
+		return Token{}, errors.New("lexer: output channel closed")
+	}
+
+	return t, nil
+}
+
+// process is the entry point for the lexer. It reads the next rune
+// from the input and decides what to do with it. We start in MODE_UNKNOWN and
+// switch to MODE_TEXT or MODE_COMMAND depending on the input. Once we know
+// which mode we're in, we call the appropriate function to process the input.
+//
+// We loop because we don't return until the input is exhausted, at which point
+// we close the output channel and return.
+func (l *Lexer) process() {
 	for {
-		currentRune, _, err = l.input.ReadRune()
-		if err != nil {
-			if l.currentToken == nil {
-				return Token{Type: TOKEN_EOF, Value: "", Line: l.line, Column: l.column}
+		r, err := l.next()
+		if err != nil || l.err != nil {
+			if l.buffer != "" {
+				l.emit(TOKEN_TEXT)
 			}
+			l.reset().save().appendString("EOF").emit(TOKEN_EOF)
 
-			l.nextToken = &Token{Type: TOKEN_EOF, Value: "", Line: l.line, Column: l.column}
-			return l.emitCurrentToken()
+			close(l.output)
+			return
 		}
 
-		currentLine, currentColumn := l.line, l.column
-
-		// increment our line/column counters
-		if currentRune == '\n' {
-			l.line++
-			l.column = 1
-		} else {
-			l.column++
-		}
-
-		// if we're in text mode, we need to check if we've found the beginning of a command
-		if l.mode == TEXT_MODE {
-			if currentRune == '[' {
-				// peek ahead to see if the next character is also a '['
-				peekedRune, _, err := l.input.ReadRune()
-				if err != nil {
-					l.nextToken = &Token{Type: TOKEN_EOF, Value: "", Line: l.line, Column: l.column}
-					l.currentToken.Value += string(currentRune)
-					return l.emitCurrentToken()
-				}
-				if peekedRune == '[' {
-					// we've found an escaped square bracket, so we need to add it to the current token
-					if l.currentToken == nil {
-						l.currentToken = &Token{Type: TOKEN_TEXT, Value: "", Line: currentLine, Column: currentColumn}
-					}
-
-					l.currentToken.Value += string(currentRune)
-
-					continue
-				}
-				// unread the peeked rune so that it can be read again on the next call to NextToken()
-				err = l.input.UnreadRune()
-				if err != nil {
-					panic(err)
-				}
-
-				l.mode = COMMAND_MODE
-				if l.currentToken != nil {
-					finishedToken = *l.currentToken
-					l.currentToken = nil
-					l.nextToken = &Token{Type: TOKEN_COMMAND_START, Value: "[", Line: currentLine, Column: currentColumn}
-					return finishedToken
-				}
-				return Token{Type: TOKEN_COMMAND_START, Value: "[", Line: currentLine, Column: currentColumn}
-			}
-
-			if l.currentToken == nil {
-				l.currentToken = &Token{Type: TOKEN_TEXT, Value: "", Line: currentLine, Column: currentColumn}
-			}
-
-			l.currentToken.Value += string(currentRune)
-		} else if l.mode == COMMAND_MODE {
-			if currentRune == ']' {
-				l.mode = TEXT_MODE
-				if l.currentToken != nil {
-					finishedToken = *l.currentToken
-					l.currentToken = nil
-					l.nextToken = &Token{Type: TOKEN_COMMAND_END, Value: "]", Line: currentLine, Column: currentColumn}
-					return finishedToken
-				}
-				return Token{Type: TOKEN_COMMAND_END, Value: "]", Line: currentLine, Column: currentColumn}
-			}
-
-			// So we don't actually know what kind of token we are parsing right now, so
-			// we need to
-
-			if l.currentToken == nil {
-				l.currentToken = &Token{Type: TOKEN_COMMAND_TEXT, Value: "", Line: currentLine, Column: currentColumn}
-			}
-
-			l.currentToken.Value += string(currentRune)
-		} else {
-			panic("Unknown lexer mode")
+		// effectively this is a state machine, which switches between modes
+		// depending on the input..
+		switch l.mode {
+		case MODE_UNKNOWN:
+			l.processUnknownMode(r)
+		case MODE_TEXT:
+			l.processTextMode(r)
+		case MODE_BRACKET_LITERAL:
+			l.processTextMode(r)
+		case MODE_COMMAND:
+			l.processCommandMode(r)
+		case MODE_COMMAND_ARG:
+			l.processCommandArgMode(r)
 		}
 	}
 }
 
-func (l *Lexer) processCommandText() Token {
-	// process input until we find the end of the command, and return a token specific to the command.
+func (l *Lexer) nextLine() *Lexer {
+	l.line++
+	l.column = 1
 
-	var buffer string
-	currentLine, currentColumn := l.line, l.column
+	return l
+}
 
-	for {
-		r, _, err := l.input.ReadRune()
-		if err != nil {
-			l.nextToken = &Token{Type: TOKEN_EOF, Value: "", Line: l.line, Column: l.column}
-			return Token{Type: TOKEN_COMMAND_TEXT, Value: buffer, Line: currentLine, Column: currentColumn}
-		}
+func (l *Lexer) nextColumn() *Lexer {
+	l.column++
 
-		// increment our line/column counters
-		if r == '\n' {
-			l.line++
-			l.column = 1
+	return l
+}
+
+func (l *Lexer) next() (rune, error) {
+	r, _, err := l.input.ReadRune()
+	if err != nil {
+		return 0, err
+	}
+
+	return r, nil
+}
+
+// start starts a new mode
+func (l *Lexer) start(m lexMode) *Lexer {
+	l.mode = m
+
+	return l
+}
+
+// emit sends the current token to the output channel
+func (l *Lexer) emit(tokenType TokenType) *Lexer {
+	l.output <- Token{
+		Type:   tokenType,
+		Value:  l.buffer,
+		Line:   l.bufferLine,
+		Column: l.bufferColumn,
+	}
+
+	return l
+}
+
+func (l *Lexer) append(r rune) *Lexer {
+	l.buffer += string(r)
+
+	return l
+}
+
+func (l *Lexer) appendString(s string) *Lexer {
+	for _, r := range s {
+		l.append(r)
+	}
+
+	return l
+}
+
+func (l *Lexer) reset() *Lexer {
+	l.buffer = ""
+
+	return l
+}
+
+func (l *Lexer) save() *Lexer {
+	l.bufferLine = l.line
+	l.bufferColumn = l.column
+
+	return l
+}
+
+func (l *Lexer) peek() rune {
+	r, _, err := l.input.ReadRune()
+	if err != nil {
+		return 0
+	}
+
+	l.input.UnreadRune()
+
+	return r
+}
+
+func (l *Lexer) processUnknownMode(r rune) {
+	switch r {
+	case '[':
+		peekedRune := l.peek()
+		if peekedRune == '[' {
+			// clear the buffer in case there's anything in it, save the current location
+			// then discard the next character, as we know it is '['.
+			_, _ = l.reset().save().next() // eat the next rune
+			l.start(MODE_TEXT).appendString("[")
+			l.nextColumn().nextColumn() // increment the column counter twice
+		} else if peekedRune == rune(0) {
+			l.err = errors.New(fmt.Sprintf("Unexpected EOF in unknown mode at %v:%v", l.line, l.column))
 		} else {
-			l.column++
+			l.append(r).emit(TOKEN_COMMAND_START).nextColumn()
+			l.reset().save().start(MODE_COMMAND)
+		}
+	default:
+		l.reset().save().start(MODE_TEXT)
+		l.processTextMode(r)
+	}
+}
+
+func (l *Lexer) processTextMode(r rune) {
+	switch r {
+	case '\n':
+		l.emit(TOKEN_TEXT)
+		l.reset().save().append('\n').emit(TOKEN_NL).nextLine()
+		l.reset().save().start(MODE_UNKNOWN)
+	case '[':
+		if l.peek() == '[' {
+			l.appendString("[")
+			l.nextColumn()
+			l.start(MODE_BRACKET_LITERAL)
+			return
+		}
+		if l.mode == MODE_BRACKET_LITERAL {
+			l.nextColumn() // we eat this one
+			l.start(MODE_TEXT)
+			return
 		}
 
-		if r == ']' || r == ' ' {
-			tokenType, err := TokenFromString(buffer)
-			if err != nil {
-				return Token{Type: TOKEN_COMMAND_TEXT, Value: buffer, Line: currentLine, Column: currentColumn}
-			}
-
-			return Token{Type: tokenType, Value: buffer, Line: currentLine, Column: currentColumn}
+		l.emit(TOKEN_TEXT)
+		l.reset().save().append('[').emit(TOKEN_COMMAND_START).nextColumn()
+		l.reset().start(MODE_COMMAND)
+	default:
+		if l.buffer == "" {
+			l.save()
 		}
+		l.append(r).nextColumn()
+	}
+}
 
-		buffer += string(r)
+func (l *Lexer) processCommandMode(r rune) {
+	switch r {
+	case ']':
+		l.emit(TOKEN_COMMAND)
+		l.reset().save().append(']').emit(TOKEN_COMMAND_END).nextColumn()
+		l.reset().save().start(MODE_TEXT)
+	case ' ':
+		l.emit(TOKEN_COMMAND).nextColumn()
+		l.reset().save().start(MODE_COMMAND_ARG)
+	case '\n':
+		l.err = errors.New(fmt.Sprintf("Unexpected newline in command '%s' at %v:%v", l.buffer, l.line, l.column))
+	default:
+		if l.buffer == "" {
+			l.save()
+		}
+		l.append(r).nextColumn()
+	}
+}
+
+// we only care about ']' and ' ' in command arg mode. Everything else is
+// appended to the buffer.
+func (l *Lexer) processCommandArgMode(r rune) {
+	switch r {
+	case ']':
+		l.emit(TOKEN_COMMAND_ARG)
+		l.reset().save().append(']').emit(TOKEN_COMMAND_END).nextColumn()
+		l.reset().save().start(MODE_UNKNOWN)
+	case ' ':
+		l.emit(TOKEN_COMMAND_ARG).nextColumn()
+		l.reset().append(' ').reset().save()
+	default:
+		if l.buffer == "" {
+			l.save()
+		}
+		l.append(r).nextColumn()
 	}
 }

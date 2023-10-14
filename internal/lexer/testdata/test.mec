@@ -27,4 +27,4 @@ Available Chat Rooms:
 [fg blue]Choose an option by entering the number and pressing enter:
 [input] // this will wait for user input
 
-[position 10,10][fg red][blink]Random Position! eeep[no blink]
+[position 10 10][fg red][blink]Random Position! eeep[no blink]
