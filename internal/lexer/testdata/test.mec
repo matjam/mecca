@@ -21,8 +21,8 @@ Available Chat Rooms:
 [rooms = chatRooms()]
 [for chatRoom in rooms]
     [chatRoom.number]. [chatRoom.name] - [chatRoom.userCount] users
-[end for]
-[end if]
+[/for]
+[/if]
 
 [fg blue]Choose an option by entering the number and pressing enter:
 [input] // this will wait for user input

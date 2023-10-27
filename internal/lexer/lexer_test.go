@@ -1,8 +1,10 @@
 package lexer
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -157,8 +159,7 @@ func TestLexerTextEndingWithSingleBracket(t *testing.T) {
 	l := NewLexer(r)
 
 	expected := []Token{
-		{Type: TOKEN_TEXT, Value: "A string ending with a single bracket", Line: 1, Column: 1},
-		{Type: TOKEN_COMMAND_START, Value: "[", Line: 1, Column: 38},
+		{Type: TOKEN_TEXT, Value: "A string ending with a single bracket[", Line: 1, Column: 1},
 		{Type: TOKEN_EOF, Value: "EOF", Line: 1, Column: 39},
 	}
 
@@ -210,6 +211,23 @@ lines
 
 		if token != expectedToken {
 			t.Errorf("Expected %v got %v\n", expectedToken, token)
+		}
+	}
+}
+
+func TestLexerWithFixture(t *testing.T) {
+	input, err := os.ReadFile("testdata/test.mec")
+	if err != nil {
+		t.Fatalf("Error reading test file: %s", err)
+	}
+	l := NewLexer(bytes.NewReader(input))
+
+	for {
+		token, _ := l.Lex()
+
+		fmt.Printf("%v\n", token)
+		if token.Type == TOKEN_EOF {
+			break
 		}
 	}
 }
