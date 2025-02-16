@@ -38,7 +38,8 @@ func isColorToken(s string) bool {
 	return exists
 }
 
-// Updated Interpret function to apply style rendering to literal text.
+// Interpret processes the input string containing MECCA tokens and literal text,
+// applies the current styling via lipgloss, and returns the rendered output.
 func Interpret(input string) string {
 	output := ""
 	currentStyle := lipgloss.NewStyle()
