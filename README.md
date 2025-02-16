@@ -20,35 +20,35 @@ might be displayed as:
 
 Other tokens can be used to display the user's name, show information about the system, or display a menu of options.
 
-The MECCA interpreter only processes tokens that are contained inside square brackets. To include a left square bracket in the text, use two left square brackets. Only the left square bracket needs to be doubled. For example, to display the following line to a user:
-
-    Want to check for your mail [Y,n]?
-
-Enter this inside a .mec file:
+The MECCA interpreter only processes tokens that are contained inside square brackets. To include a left square bracket in the text, use two left square brackets. Only the left square bracket needs to be doubled. For example, use the following
 
     Want to check for your mail [[Y,n]?
 
+which will render as:
+
+    Want to check for your mail [Y,n]?
+
 When using MECCA tokens, also keep these points in mind:
 
- * Tokens are not case-sensitive. That means that the following tokens are equivalent in all respects:
+Tokens are not case-sensitive. That means that the following tokens are equivalent in all respects:
 
-    `[user]`
-    `[USER]`
-    `[UsEr]`
+    [user]
+    [USER]
+    [UsEr]
 
-*  Spaces are ignored. Inside MECCA tokens, any spaces, tabs or newlines will have no effect. This means that the following tokens are equivalent in all respects:
+Spaces are ignored. Inside MECCA tokens, any spaces, tabs or newlines will have no effect. This means that the following tokens are equivalent in all respects:
 
-    `[  user  ]`
-    `[    user]`
-    `[user    ]`
+    [  user  ]
+    [    user]
+    [user    ]
 
-* More than one token can be inserted inside a set of square brackets, as long as tokens are separated from each other using spaces. For example, this line:
+More than one token can be inserted inside a set of square brackets, as long as tokens are separated from each other using spaces. For example, this line:
 
-    `[lightblue][blink][user]`
+    [lightblue][blink][user]
 
-  can also be written as follows:
+can also be written as follows:
 
-    `[lightblue blink user]`
+    [lightblue blink user]
 
 MECCA also allows you to use ASCII and UTF-8 codes directly in the .mec file. To insert a specific ASCII code, simply enclose the ASCII code number inside a pair of square brackets. For example, the token [123] will be compiled to ASCII code 123 in the output file. To insert a UTF-8 code, use the format [U+xxxx] where xxxx is the hexadecimal UTF-8 code. For example, the token [U+00A9] will be compiled to the copyright symbol ©.
 
@@ -58,45 +58,45 @@ Note that the [user] token mentioned above is not a token that is recognized by 
 
 MECCA supports a number of color tokens that can be used to change the color of text. TTo display text in a specific color, simply enclose the name of the color in square brackets. For example, to display the text "Hello, world!" in red, use the following token:
 
-    `[red]Hello, world!`
+    [red]Hello, world!
 
 To display text on a colored background, use a token of the form "foreground on background". For example, to display the text "Hello, world!" in red on a white background, use the following token:
 
-    `[red on white]Hello, world!`
+    [red on white]Hello, world!
 
 MECCA supports the ANSI 4-bit color palette, which includes the following colors which can be used as foreground and background colors:
 
-    `black`
-    `red`
-    `green`
-    `yellow`
-    `blue`
-    `magenta`
-    `cyan`
-    `white`
+    black
+    red
+    green
+    yellow
+    blue
+    magenta
+    cyan
+    white
 
 as well as the following additional colors which can only be used as foreground colors:
 
-    `lightblack`
-    `lightred`
-    `lightgreen`
-    `lightyellow`
-    `lightblue`
-    `lightmagenta`
-    `lightcyan`
-    `lightwhite`
+    lightblack
+    lightred
+    lightgreen
+    lightyellow
+    lightblue
+    lightmagenta
+    lightcyan
+    lightwhite
 
 MECCA also supports ANSI 256-color mode, which allows you to specify colors using a 256-color palette. To use a 256-color, prefix the color number with a `#`. For example, to display text in color 202 (orange), use the following token:
 
-    `[#202]Hello, world!`
+    [#202]Hello, world!
 
 Lastly, MECCA supports true color mode, which allows you to specify colors using RGB values. To use true color, prefix the RGB values with a `#`. For example, to display text in a light blue color, use the following token:
 
-    `[#ADD8E6]Hello, world!`
+    [#ADD8E6]Hello, world!
 
 These color modes can be combined to create more complex color schemes. For example, to display text in light blue on a dark blue background, use the following token:
 
-    `[lightblue on #00008B]Hello, world!`
+    [lightblue on #00008B]Hello, world!
 
 ### Text Style Tokens
 
