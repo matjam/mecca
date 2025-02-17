@@ -125,7 +125,6 @@ The supported text styles are:
     [locate <row> <column>] moves the cursor to the specified row and column. The first row is 0 and the first column is 0.
     [savecursor]            saves the current cursor position.
     [restorecursor]         restores the cursor position saved by the [savecursor] token.
-    [box <width> <height>]  draws a box of the specified width and height from the current cursor position.
     [line <length> <char>]  draws a line of the specified length using the specified character from the current cursor position.
     [underline]             underlines the text.
     [reverse]               reverses the foreground and background colors.

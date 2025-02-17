@@ -2,10 +2,12 @@ package mecca
 
 import (
 	"fmt"
+	"os"
 	"strconv" // new import for locate token
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Updated colorMapping to use ANSI 16-color codes.
@@ -38,9 +40,18 @@ func isColorToken(s string) bool {
 	return exists
 }
 
+func (interpreter *Interpreter) InterpretFile(filename string) (string, error) {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return "", err
+	}
+
+	return interpreter.Interpret(string(data)), nil
+}
+
 // Interpret processes the input string containing MECCA tokens and literal text,
 // applies the current styling via lipgloss, and returns the rendered output.
-func Interpret(input string) string {
+func (interpreter *Interpreter) Interpret(input string) string {
 	output := ""
 	currentStyle := lipgloss.NewStyle()
 	for {
@@ -79,61 +90,129 @@ func Interpret(input string) string {
 			break
 		}
 		tokenContent := input[start+1 : start+end]
-		output += processToken(tokenContent, &currentStyle)
+		output += interpreter.processToken(tokenContent, &currentStyle)
 		input = input[start+end+1:]
 	}
 	return output
 }
 
 // Updated processToken function to wrap returned token text with the current style.
-func processToken(content string, style *lipgloss.Style) string {
+func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style) string {
 	parts := strings.Fields(content)
 	result := ""
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
 		// Handle special tokens.
 		switch strings.ToLower(part) {
-		case "cls":
-			// Clear screen and move cursor to top left.
-			result += "\033[2J\033[H"
+		case "cls": // [cls] token: clear screen.
+			result += ansi.EraseDisplay(2) + ansi.CursorPosition(1, 1)
 			continue
-		case "blink": // Update blink token to use lipgloss's blink style.
+		case "cleos": // [cleos] token: clear to end of screen.
+			result += ansi.EraseDisplay(0)
+			continue
+		case "cleol": // [cleol] token: clear to end of line.
+			result += ansi.EraseLine(0)
+		case "blink": // [blink] token: blink text.
 			*style = style.Blink(true)
 			continue
-		case "bold":
+		case "bright": // [bright] token: brighten text. (synonym for bold)
+			fallthrough
+		case "bold": // [bold] token: bold text.
 			*style = style.Bold(true)
 			continue
-		case "reset": // New reset token: remove all styling.
+		case "underline": // [underline] token: underline text.
+			*style = style.Underline(true)
+			continue
+		case "italic": // [italic] token: italicize text.
+			*style = style.Italic(true)
+			continue
+		case "dim": // [dim] token: dim text.
+			*style = style.Faint(true)
+			continue
+		case "reverse": // [reverse] token: reverse text.
+			*style = style.Reverse(true)
+			continue
+		case "strike": // [strike] token: strike through text.
+			*style = style.Strikethrough(true)
+			continue
+		case "reset": // [reset] token: remove all styling.
 			*style = lipgloss.NewStyle()
 			continue
-		case "locate": // New locate token: expects two arguments.
+		case "locate": // [locate] token: expects two arguments.
 			if i+2 < len(parts) {
 				col, err1 := strconv.Atoi(parts[i+1])
 				row, err2 := strconv.Atoi(parts[i+2])
 				if err1 == nil && err2 == nil {
 					// ANSI escape sequence: CSI row;colH (adding 1 for 1-indexing)
-					result += fmt.Sprintf("\033[%d;%dH", row+1, col+1)
+					result += ansi.CursorPosition(row+1, col+1)
 				}
 				i += 2
 			}
 			continue
-		case "cr": // New [cr] token: moves the cursor to the beginning of the line.
+		case "cr": // [cr] token: moves the cursor to the beginning of the line.
 			result += "\r"
 			continue
+		case "lf": // [lf] token: moves the cursor to the next line.
+			result += ansi.CursorNextLine(1)
+			continue
+		case "up": // [up] token: moves the cursor up one line.
+			result += ansi.CursorUp(1)
+			continue
+		case "down": // [down] token: moves the cursor down one line.
+			result += ansi.CursorDown(1)
+			continue
+		case "right": // [right] token: moves the cursor right one column.
+			result += ansi.CursorForward(1)
+			continue
+		case "left": // [left] token: moves the cursor left one column.
+			result += ansi.CursorBackward(1)
+			continue
+		case "savecursor": // [savecursor] token: saves the current cursor position.
+			result += ansi.SaveCursor
+			continue
+		case "restorecursor": // [restorecursor] token: restores the saved cursor position.
+			result += ansi.RestoreCursor
+			continue
+		case "line": // draws a line of a specified length using the specified character.
+			if i+2 < len(parts) {
+				length, err1 := strconv.Atoi(parts[i+1])
+				char := parts[i+2]
+				if err1 == nil {
+					result += strings.Repeat(char, length)
+				}
+				i += 2
+			}
+			continue
 		}
-		// Handle color tokens.
+		// Colors can be specified one of three ways:
+		// 1. By name (e.g., red, green, blue)
+		// 2. By hex code (e.g., #ff0000, #00ff00, #0000ff)
+		// 3. By ANSI color code, as a number (e.g., #63)
 		if isColorToken(part) {
 			tokenLower := strings.ToLower(part)
-			// If token starts with '#' use as is; else use mapping.
 			if strings.HasPrefix(tokenLower, "#") {
-				*style = style.Foreground(lipgloss.Color(tokenLower))
+				if len(tokenLower) == 7 {
+					*style = style.Foreground(lipgloss.Color(tokenLower))
+				} else {
+					// ANSI color code
+					if n, err := parseNumber(tokenLower[1:]); err == nil {
+						*style = style.Foreground(lipgloss.Color(strconv.Itoa(n)))
+					}
+				}
 			} else if col, ok := colorMapping[tokenLower]; ok {
 				*style = style.Foreground(col)
 			}
 			if i+2 < len(parts) && strings.ToLower(parts[i+1]) == "on" {
 				bgToken := strings.ToLower(parts[i+2])
 				if strings.HasPrefix(bgToken, "#") {
-					*style = style.Background(lipgloss.Color(bgToken))
+					if len(bgToken) == 7 {
+						*style = style.Background(lipgloss.Color(bgToken))
+					} else {
+						// ANSI color code
+						if n, err := parseNumber(bgToken[1:]); err == nil {
+							*style = style.Background(lipgloss.Color(strconv.Itoa(n)))
+						}
+					}
 				} else if bg, ok := colorMapping[bgToken]; ok {
 					*style = style.Background(bg)
 				}
@@ -155,7 +234,7 @@ func processToken(content string, style *lipgloss.Style) string {
 			}
 		}
 		// Look up registered tokens.
-		if token, ok := GetToken(part); ok {
+		if token, ok := interpreter.GetToken(part); ok {
 			if token.ArgCount > 0 && i+token.ArgCount < len(parts) {
 				args := parts[i+1 : i+1+token.ArgCount]
 				tokenOut := token.Func(args)
@@ -167,7 +246,8 @@ func processToken(content string, style *lipgloss.Style) string {
 			}
 			continue
 		}
-		// If token is unrecognized, simply do not output anything.
+		// If token is unrecognized, emit an error message inline.
+		result += style.Render(fmt.Sprintf("[UNRECOGNIZED TOKEN \"%s\"]", part))
 	}
 	return result
 }

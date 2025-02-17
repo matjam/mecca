@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
+	// Create a new MECCA interpreter.
+	interpreter := mecca.NewInterpreter()
+
 	// Define flag dimensions
 	width := 80
 
@@ -16,14 +19,17 @@ func main() {
 		color string // token for color (foreground and background)
 		rows  int    // number of rows for this stripe
 	}
-	// LGBTQ+ Pride flag stripes.
+
+	// Define the flag stripes.
 	stripes := []stripe{
-		{"#E40303", 3}, // Red
-		{"#FF8C00", 3}, // Orange
-		{"#FFED00", 3}, // Yellow
-		{"#008026", 3}, // Green
-		{"#004DFF", 3}, // Blue
-		{"#750787", 3}, // Violet
+		{"#FF69B4", 2}, // Hot Pink
+		{"#FF0000", 2}, // Red
+		{"#FF8E00", 2}, // Orange
+		{"#FFFF00", 2}, // Yellow
+		{"#008E00", 2}, // Green
+		{"#00C0C0", 2}, // Turquoise
+		{"#400098", 2}, // Indigo
+		{"#8E008E", 2}, // Violet
 	}
 
 	var sb strings.Builder
@@ -42,6 +48,6 @@ func main() {
 	}
 
 	template := sb.String()
-	result := mecca.Interpret(template)
+	result := interpreter.Interpret(template)
 	fmt.Print(result)
 }

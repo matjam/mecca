@@ -8,6 +8,9 @@ import (
 )
 
 func main() {
+	// Create a new MECCA interpreter.
+	interpreter := mecca.NewInterpreter()
+
 	// Build a MECCA template demonstrating colors.
 	var sb strings.Builder
 
@@ -36,6 +39,6 @@ func main() {
 
 	template := sb.String()
 	// Interpret the MECCA template.
-	result := mecca.Interpret(template)
+	result := interpreter.Interpret(template)
 	fmt.Println(result)
 }

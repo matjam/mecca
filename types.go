@@ -15,21 +15,24 @@ type Token struct {
 	ArgCount int       // ArgCount is the number of expected arguments.
 }
 
-// tokenRegistry stores all registered tokens.
-var tokenRegistry = make(map[string]Token)
+type Interpreter struct {
+	tokenRegistry map[string]Token
+}
 
-// RegisterToken registers a token by name, its processing function, and the number of arguments it takes.
-// The token name is case-insensitive.
-func RegisterToken(name string, fn TokenFunc, argCount int) {
-	tokenRegistry[strings.ToLower(name)] = Token{
+func NewInterpreter() *Interpreter {
+	return &Interpreter{
+		tokenRegistry: make(map[string]Token),
+	}
+}
+
+func (i *Interpreter) RegisterToken(name string, fn TokenFunc, argCount int) {
+	i.tokenRegistry[strings.ToLower(name)] = Token{
 		Func:     fn,
 		ArgCount: argCount,
 	}
 }
 
-// GetToken retrieves a registered token by name.
-// It returns the Token and a boolean indicating whether it was found.
-func GetToken(name string) (Token, bool) {
-	token, ok := tokenRegistry[strings.ToLower(name)]
+func (i *Interpreter) GetToken(name string) (Token, bool) {
+	token, ok := i.tokenRegistry[strings.ToLower(name)]
 	return token, ok
 }
