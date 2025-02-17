@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matjam/mecca"
 )
 
-func main() {
+func example3() {
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter()
+	interpreter := mecca.NewInterpreter(os.Stdout)
 
 	// Define flag dimensions
 	width := 80

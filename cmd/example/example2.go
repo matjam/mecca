@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/matjam/mecca"
 )
 
-func main() {
+func example2() {
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter()
+	interpreter := mecca.NewInterpreter(os.Stdout)
 
 	// Build a MECCA template demonstrating colors.
 	var sb strings.Builder

@@ -1,7 +1,10 @@
 package mecca
 
 import (
+	"io"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 // TokenFunc defines a function for processing a MECCA token.
@@ -16,11 +19,15 @@ type Token struct {
 }
 
 type Interpreter struct {
+	writer        io.Writer
+	renderer      *lipgloss.Renderer
 	tokenRegistry map[string]Token
 }
 
-func NewInterpreter() *Interpreter {
+func NewInterpreter(w io.Writer) *Interpreter {
 	return &Interpreter{
+		writer:        w,
+		renderer:      lipgloss.NewRenderer(w),
 		tokenRegistry: make(map[string]Token),
 	}
 }

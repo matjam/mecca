@@ -2,6 +2,7 @@ package mecca
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv" // new import for locate token
 	"strings"
@@ -53,7 +54,7 @@ func (interpreter *Interpreter) InterpretFile(filename string) (string, error) {
 // applies the current styling via lipgloss, and returns the rendered output.
 func (interpreter *Interpreter) Interpret(input string) string {
 	output := ""
-	currentStyle := lipgloss.NewStyle()
+	currentStyle := interpreter.renderer.NewStyle()
 	for {
 		start := strings.Index(input, "[")
 		if start == -1 {
@@ -136,7 +137,7 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			*style = style.Strikethrough(true)
 			continue
 		case "reset": // [reset] token: remove all styling.
-			*style = lipgloss.NewStyle()
+			*style = interpreter.renderer.NewStyle()
 			continue
 		case "locate": // [locate] token: expects two arguments.
 			if i+2 < len(parts) {
@@ -279,4 +280,18 @@ func decodeUTF8Token(hexStr string) (rune, error) {
 		return 0, err
 	}
 	return rune(n), nil
+}
+
+func (interpreter *Interpreter) Render(input string) {
+	io.WriteString(interpreter.writer, interpreter.Interpret(input))
+}
+
+func (interpreter *Interpreter) RenderFile(filename string) error {
+	data, err := os.ReadFile(filename)
+	if err != nil {
+		return err
+	}
+
+	interpreter.Render(string(data))
+	return nil
 }
