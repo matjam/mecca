@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"time" // added for timing
 
 	"github.com/matjam/mecca"
 )
@@ -20,7 +18,7 @@ func example1() {
 	}
 
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter(os.Stdout)
+	interpreter := mecca.NewInterpreter(mecca.WithTemplateRoot("cmd/example"))
 
 	// Register a custom token for demonstration.
 	interpreter.RegisterToken("user", ctx.userToken, 0)
@@ -28,24 +26,24 @@ func example1() {
 
 	// Example MECCA template using a registered token and standard tokens.
 	template := `
-[cls bold yellow]Welcome, [user]! [reset]
+[cls white]This is an example of a MECCA template using a registered token and standard tokens.
+
+[bold yellow]Welcome, [user]! [reset]
 You have [lightblue msgcount 3 reset] new messages.
+
+[bold yellow][line 80 -]
+There are multiple examples; you can execute them by running the following commands:
+
+[bold cyan]go run ./cmd/example 1
+go run ./cmd/example 2
+go run ./cmd/example 3
+go run ./cmd/example 4
+
+This is an example of a string that was passed at execution time: [bold red foo reset]
 `
 
-	for i := 0; i < 240; i++ {
-		if i%24 == 0 {
-			template += "\n"
-		}
-		template += fmt.Sprintf("[#%d]█", i+16)
-	}
-
-	start := time.Now() // start timing
-
 	// Render the template.
-	interpreter.Render(template)
-
-	// Print elapsed time.
-	fmt.Printf("\nInterpretation took: %v\n", time.Since(start))
+	interpreter.ExecString(template, map[string]any{"foo": "bar"})
 }
 
 // userToken returns a sample user name.

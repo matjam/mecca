@@ -1,14 +1,22 @@
 package mecca
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"path"
 	"strconv" // new import for locate token
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/creack/pty"
+	"github.com/muesli/termenv"
+	"golang.org/x/text/encoding/charmap"
 )
 
 // Updated colorMapping to use ANSI 16-color codes.
@@ -31,28 +39,156 @@ var colorMapping = map[string]lipgloss.Color{
 	"lightwhite":   lipgloss.Color("15"),
 }
 
-// Updated isColorToken to check the colorMapping keys.
-func isColorToken(s string) bool {
-	s = strings.ToLower(s)
-	if strings.HasPrefix(s, "#") {
-		return true
+// Create a termenv.Output from the session.
+func outputFromSession(sess ssh.Session) *termenv.Output {
+	sshPty, _, _ := sess.Pty()
+	_, tty, err := pty.Open()
+	if err != nil {
+		log.Fatal(err)
 	}
-	_, exists := colorMapping[s]
-	return exists
+	o := &sshOutput{
+		Session: sess,
+		tty:     tty,
+	}
+	environ := sess.Environ()
+	environ = append(environ, fmt.Sprintf("TERM=%s", sshPty.Term))
+	e := &sshEnviron{environ: environ}
+	// We need to use unsafe mode here because the ssh session is not running
+	// locally and we already know that the session is a TTY.
+	return termenv.NewOutput(o, termenv.WithUnsafe(), termenv.WithEnvironment(e))
 }
 
-func (interpreter *Interpreter) InterpretFile(filename string) (string, error) {
-	data, err := os.ReadFile(filename)
+// NewInterpreter creates a new MECCA interpreter with a default template root
+// directory and output writer. The template root directory is the current
+// working directory, and the output writer is os.Stdout. You can customize the
+// template root directory and output writer by passing options to NewInterpreter.
+func NewInterpreter(options ...func(*Interpreter)) *Interpreter {
+	interpreter := &Interpreter{
+		templateRoot:  ".",
+		session:       nil,
+		renderer:      lipgloss.NewRenderer(os.Stdout),
+		output:        termenv.NewOutput(os.Stdout),
+		tokenRegistry: make(map[string]Token),
+	}
+
+	for _, option := range options {
+		option(interpreter)
+	}
+
+	return interpreter
+}
+
+// WithTemplateRoot is a functional option to set the template root directory for
+// NewInterpreter. The template root directory is the base directory for all
+// template files. If a template includes another template, the included template
+// is resolved relative to the template root directory. The default template root
+// directory is the current working directory.
+func WithTemplateRoot(root string) func(*Interpreter) {
+	return func(i *Interpreter) {
+		i.templateRoot = root
+	}
+}
+
+// WithSession is a functional option to set the SSH session for the interpreter.
+// SSH sessions are from github.com/charmbracelet/ssh. If a session is set, the
+// interpreter uses the session's output for rendering. If a session is not set,
+// the interpreter uses os.Stdout as the output writer.
+func WithSession(sess ssh.Session) func(*Interpreter) {
+	return func(i *Interpreter) {
+		i.session = sess
+		i.output = outputFromSession(sess)
+		i.renderer = lipgloss.NewRenderer(i.output)
+	}
+}
+
+// WithWriter is a functional option to set the output writer for the interpreter.
+// The output writer is used to render the output of the interpreter. The default
+// output writer is os.Stdout. You can use WithWriter to set a different output
+// writer, such as a file or buffer.
+func WithWriter(w io.Writer) func(*Interpreter) {
+	return func(i *Interpreter) {
+		i.output = termenv.NewOutput(w)
+		i.renderer = lipgloss.NewRenderer(i.output)
+	}
+}
+
+// RegisterToken registers a new token with the interpreter. The token name is
+// case-insensitive. The token function is called with the token's arguments and
+// should return the substitution string. You can use a type method as a token
+// function, as shown in the example.
+func (i *Interpreter) RegisterToken(name string, fn TokenFunc, argCount int) {
+	if _, ok := i.tokenRegistry[strings.ToLower(name)]; ok {
+		panic(fmt.Sprintf("token %s already registered", name))
+	}
+
+	i.tokenRegistry[strings.ToLower(name)] = Token{
+		Func:     fn,
+		ArgCount: argCount,
+	}
+}
+
+// GetToken retrieves a token by name. The name is case-insensitive.
+func (i *Interpreter) GetToken(name string) (Token, bool) {
+	token, ok := i.tokenRegistry[strings.ToLower(name)]
+	return token, ok
+}
+
+// ExecTemplate reads a template file from the template root directory and
+// executes it. The filename is relative to the template root directory.
+// Returns the rendered output or an error if the file cannot be read.
+func (interpreter *Interpreter) ExecTemplate(filename string, vars map[string]any) (string, error) {
+	templatePath := path.Join(interpreter.templateRoot, filename)
+	data, err := os.ReadFile(templatePath)
 	if err != nil {
 		return "", err
 	}
 
-	return interpreter.Interpret(string(data)), nil
+	return interpreter.interpret(string(data), vars, []string{filename}), nil
 }
 
-// Interpret processes the input string containing MECCA tokens and literal text,
+// ExecString processes the input string containing MECCA tokens and executes it.
+// The output is written to the interpreter's writer, and any included templates
+// are resolved relative to the template root directory specified when creating
+// the interpreter.
+func (interpreter *Interpreter) ExecString(input string, vars map[string]any) {
+	io.WriteString(interpreter.output, interpreter.interpret(input, vars, []string{}))
+}
+
+// RenderFile reads a file relative to the template root directory and renders it
+// using the interpreter's writer. Returns an error if the file cannot be read.
+func (interpreter *Interpreter) RenderTemplate(filename string, vars map[string]any) error {
+	templatePath := path.Join(interpreter.templateRoot, filename)
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return err
+	}
+
+	output := interpreter.interpret(string(data), vars, []string{filename})
+
+	if interpreter.session != nil {
+		wish.WriteString(interpreter.session, output)
+		return nil
+	}
+
+	io.WriteString(interpreter.output, output)
+	return nil
+}
+
+// RenderString processes the input string containing MECCA tokens and renders it
+// using the interpreter's writer. Any included templates are resolved relative to
+// the template root directory specified when creating the interpreter.
+func (interpreter *Interpreter) RenderString(input string, vars map[string]any) {
+	if interpreter.session != nil {
+		wish.WriteString(interpreter.session, interpreter.interpret(input, vars, []string{}))
+		return
+	}
+
+	io.WriteString(interpreter.output, interpreter.interpret(input, vars, []string{}))
+}
+
+// interpret processes the input string containing MECCA tokens and literal text,
 // applies the current styling via lipgloss, and returns the rendered output.
-func (interpreter *Interpreter) Interpret(input string) string {
+func (interpreter *Interpreter) interpret(input string, vars map[string]any, includes []string) string {
 	output := ""
 	currentStyle := interpreter.renderer.NewStyle()
 	for {
@@ -91,14 +227,14 @@ func (interpreter *Interpreter) Interpret(input string) string {
 			break
 		}
 		tokenContent := input[start+1 : start+end]
-		output += interpreter.processToken(tokenContent, &currentStyle)
+		output += interpreter.processToken(tokenContent, &currentStyle, vars, includes)
 		input = input[start+end+1:]
 	}
 	return output
 }
 
-// Updated processToken function to wrap returned token text with the current style.
-func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style) string {
+// processToken function to wrap returned token text with the current style.
+func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string) string {
 	parts := strings.Fields(content)
 	result := ""
 	for i := 0; i < len(parts); i++ {
@@ -184,6 +320,55 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				i += 2
 			}
 			continue
+		case "include": // [include] token: expects one argument.
+			if i+1 < len(parts) {
+				filename := parts[i+1]
+
+				// Prevent infinite recursion.
+				for _, inc := range includes {
+					if inc == filename {
+						result += fmt.Sprintf("[ERROR: %s included recursively]", filename)
+						return result
+					}
+				}
+
+				if output, err := interpreter.ExecTemplate(filename, vars); err == nil {
+					result += output
+				} else {
+					result += fmt.Sprintf("[ERROR: %v]", err)
+				}
+				i++
+			}
+			continue
+		case "ansi": // [ansi] token: expects one argument, the ANSI file to include.
+			if i+1 < len(parts) {
+				filename := parts[i+1]
+				data := path.Join(interpreter.templateRoot, filename)
+
+				if output, err := os.ReadFile(data); err == nil {
+					result += string(output)
+				} else {
+					result += fmt.Sprintf("[ERROR: %v]", err)
+				}
+
+				i++
+			}
+			continue
+		case "ansiconvert": // [ansiconvert] token: expects two arguments, the ANSI file to convert and the input charset.
+			if i+2 < len(parts) {
+				filename := parts[i+1]
+				charset := parts[i+2]
+				data := path.Join(interpreter.templateRoot, filename)
+
+				if output, err := os.ReadFile(data); err == nil {
+					result += convertFromCharset(string(output), charset)
+				} else {
+					result += fmt.Sprintf("[ERROR: %v]", err)
+				}
+
+				i += 2
+			}
+			continue
 		}
 		// Colors can be specified one of three ways:
 		// 1. By name (e.g., red, green, blue)
@@ -231,6 +416,13 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			// Handle ASCII token from a number.
 			if n, err := parseNumber(part); err == nil {
 				result += style.Render(string(rune(n)))
+				continue
+			}
+		}
+		// Handle variable tokens.
+		if vars != nil {
+			if val, ok := vars[part]; ok {
+				result += style.Render(fmt.Sprintf("%v", val))
 				continue
 			}
 		}
@@ -282,16 +474,26 @@ func decodeUTF8Token(hexStr string) (rune, error) {
 	return rune(n), nil
 }
 
-func (interpreter *Interpreter) Render(input string) {
-	io.WriteString(interpreter.writer, interpreter.Interpret(input))
+// isColorToken to check the colorMapping keys.
+func isColorToken(s string) bool {
+	s = strings.ToLower(s)
+	if strings.HasPrefix(s, "#") {
+		return true
+	}
+	_, exists := colorMapping[s]
+	return exists
 }
 
-func (interpreter *Interpreter) RenderFile(filename string) error {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return err
+func convertFromCharset(input string, charset string) string {
+	var b bytes.Buffer
+	switch strings.ToLower(charset) {
+	case "cp437":
+		// Convert from CP437 to UTF-8.
+		cp437Reader := charmap.CodePage437.NewDecoder().Reader(strings.NewReader(input))
+		io.Copy(&b, cp437Reader)
+	default:
+		// No conversion.
+		b.WriteString(fmt.Sprintf("[ERROR: unsupported charset %s]", charset))
 	}
-
-	interpreter.Render(string(data))
-	return nil
+	return b.String()
 }

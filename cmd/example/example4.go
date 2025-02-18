@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	// added for timing
 	"github.com/matjam/mecca"
@@ -10,7 +9,7 @@ import (
 
 func example4() {
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter(os.Stdout)
+	interpreter := mecca.NewInterpreter(mecca.WithTemplateRoot("cmd/example"))
 
 	// Example MECCA template using a registered token and standard tokens.
 	template := "[cls bold #255]Standard 4-bit Colors:[reset]\n"
@@ -35,5 +34,5 @@ func example4() {
 	template += "\n"
 
 	// Render the template.
-	interpreter.Render(template)
+	interpreter.ExecString(template, nil)
 }

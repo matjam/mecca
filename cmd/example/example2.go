@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/matjam/mecca"
@@ -10,7 +9,7 @@ import (
 
 func example2() {
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter(os.Stdout)
+	interpreter := mecca.NewInterpreter(mecca.WithTemplateRoot("cmd/example"))
 
 	// Build a MECCA template demonstrating colors.
 	var sb strings.Builder
@@ -29,7 +28,7 @@ func example2() {
 	}
 
 	// Demonstrate foreground on background combinations.
-	sb.WriteString("\n[bold]Foreground on Background Colors:\n ")
+	sb.WriteString("\n[cls][bold]Foreground on Background Colors:\n ")
 	for f, fg := range colors {
 		sb.WriteString("\n[yellow on black]> ")
 
@@ -37,9 +36,8 @@ func example2() {
 			sb.WriteString(fmt.Sprintf("[%s on %s]%3v/%3v ", fg, bg, f, b))
 		}
 	}
+	sb.WriteString("\n")
 
-	template := sb.String()
 	// Interpret the MECCA template.
-	result := interpreter.Interpret(template)
-	fmt.Println(result)
+	interpreter.ExecString(sb.String(), nil)
 }

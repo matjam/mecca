@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/matjam/mecca"
@@ -10,7 +9,7 @@ import (
 
 func example3() {
 	// Create a new MECCA interpreter.
-	interpreter := mecca.NewInterpreter(os.Stdout)
+	interpreter := mecca.NewInterpreter(mecca.WithTemplateRoot("cmd/example"))
 
 	// Define flag dimensions
 	width := 80
@@ -36,6 +35,8 @@ func example3() {
 	var sb strings.Builder
 	block := strings.Repeat("█", width)
 
+	sb.WriteString("[cls][bold]For my friends who have different orientations, I present to you the flag of diversity!\n\n")
+
 	// Build the flag template.
 	for _, s := range stripes {
 		// Use [reset] to clear previous styling.
@@ -48,7 +49,5 @@ func example3() {
 		}
 	}
 
-	template := sb.String()
-	result := interpreter.Interpret(template)
-	fmt.Print(result)
+	interpreter.ExecString(sb.String(), nil)
 }

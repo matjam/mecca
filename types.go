@@ -1,10 +1,13 @@
 package mecca
 
 import (
-	"io"
+	"os"
 	"strings"
 
+	"github.com/charmbracelet/ssh"
+
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // TokenFunc defines a function for processing a MECCA token.
@@ -18,28 +21,46 @@ type Token struct {
 	ArgCount int       // ArgCount is the number of expected arguments.
 }
 
+// Interpreter is a MECCA interpreter that processes MECCA templates.
 type Interpreter struct {
-	writer        io.Writer
+	templateRoot  string
+	session       ssh.Session
 	renderer      *lipgloss.Renderer
+	output        *termenv.Output
 	tokenRegistry map[string]Token
 }
 
-func NewInterpreter(w io.Writer) *Interpreter {
-	return &Interpreter{
-		writer:        w,
-		renderer:      lipgloss.NewRenderer(w),
-		tokenRegistry: make(map[string]Token),
-	}
+// Bridge Wish and Termenv so we can query for a user's terminal capabilities.
+type sshOutput struct {
+	ssh.Session
+	tty *os.File
 }
 
-func (i *Interpreter) RegisterToken(name string, fn TokenFunc, argCount int) {
-	i.tokenRegistry[strings.ToLower(name)] = Token{
-		Func:     fn,
-		ArgCount: argCount,
-	}
+func (s *sshOutput) Write(p []byte) (int, error) {
+	return s.Session.Write(p)
 }
 
-func (i *Interpreter) GetToken(name string) (Token, bool) {
-	token, ok := i.tokenRegistry[strings.ToLower(name)]
-	return token, ok
+func (s *sshOutput) Read(p []byte) (int, error) {
+	return s.Session.Read(p)
+}
+
+func (s *sshOutput) Fd() uintptr {
+	return s.tty.Fd()
+}
+
+type sshEnviron struct {
+	environ []string
+}
+
+func (s *sshEnviron) Getenv(key string) string {
+	for _, v := range s.environ {
+		if strings.HasPrefix(v, key+"=") {
+			return v[len(key)+1:]
+		}
+	}
+	return ""
+}
+
+func (s *sshEnviron) Environ() []string {
+	return s.environ
 }

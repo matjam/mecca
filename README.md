@@ -8,7 +8,9 @@ This implementation provides a subset of the MECCA language primarily for creati
 
 ## Syntax
 
-The input file for the MECCA interpreter normally has a .mec extension and consists of plain UTF-8 text. The file can contain specia MECCA tokens which are parsed and rendered by the MECCA interpreter.
+The input file for the MECCA interpreter normally has a .mec extension and consists of plain UTF-8 text. The file can contain specia MECCA tokens which are parsed and rendered by the MECCA interpreter. If you wish to insert CP437 characters directly into the file, they will need to be converted to UTF-8 first. You can do this with the `iconv` command:
+
+    iconv -f CP437 -t UTF-8 input.mec > output.mec
 
 In MECCA, a token is delimited by a set of square brackets (e.g. `[token]`). The token can contain a command and arguments. The command is separated from the arguments by a space. Additional arguments are also separated by spaces, and can be quoted if they contain spaces. Anything outside of a token is considered to be text that is rendered as-is. Different types of tokens can be inserted in a MECCA file to achieve different effects. For example, the following line of text:
 
@@ -53,6 +55,12 @@ can also be written as follows:
 MECCA also allows you to use ASCII and UTF-8 codes directly in the .mec file. To insert a specific ASCII code, simply enclose the ASCII code number inside a pair of square brackets. For example, the token [123] will be compiled to ASCII code 123 in the output file. To insert a UTF-8 code, use the format [U+xxxx] where xxxx is the hexadecimal UTF-8 code. For example, the token [U+00A9] will be compiled to the copyright symbol ©.
 
 Note that the [user] token mentioned above is not a token that is recognized by the MECCA interpreter. It is used here as an example of a token that could be used in a MECCA file, once the MECCA interpreter has been extended to support it. It is intended that the application using the MECCA interpreter will define the tokens that are recognized by the interpreter.
+
+### Variables
+
+Variables can be passed at execution time to the MECCA interpreter. Variables are passed as a map of string keys and any value. The keys are used to replace the variable tokens in the MECCA file. For example, if you have a MECCA file that contains the token `[user]`, you can pass a variable with the key `user` and the value `John Doe` to the MECCA interpreter. The MECCA interpreter will replace the `[user]` token with the value `John Doe`. In this way, tokens can be created on the fly by the application using the MECCA interpreter.
+
+Tokens registered at the time the interpreter is created are overridden by variables passed at execution time. For example, if you have a token `[user]` registered with the MECCA interpreter, and you pass a variable with the key `user` and the value `John Doe`, the `[user]` token will be replaced with `John Doe` in the MECCA file.
 
 ### Color Tokens
 
@@ -129,7 +137,15 @@ The supported text styles are:
     [underline]             underlines the text.
     [reverse]               reverses the foreground and background colors.
     [italic]                makes the text italic.
-    [strike]                strikes through the text.    
+    [strike]                strikes through the text.
+
+### Including Files in MECCA Files
+
+MECCA supports the ability to include other files in a MECCA file. To include a file, use the following token:
+
+    [include <filename>]
+
+filename is the name of the file to include. The file must be in the same directory as the MECCA file that is including it. The included file can contain any valid MECCA tokens, including other include tokens. This allows you to create modular MECCA files that can be reused in multiple places.
 
 ### Implementing a new Token
 

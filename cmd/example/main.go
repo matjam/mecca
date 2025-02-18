@@ -20,6 +20,8 @@ func main() {
 		example3()
 	case "4":
 		example4()
+	case "5":
+		example5()
 	default:
 		fmt.Println("Usage: mectest <exanmple number>")
 		os.Exit(1)
