@@ -97,7 +97,9 @@ func WithSession(sess ssh.Session) func(*Interpreter) {
 	return func(i *Interpreter) {
 		i.session = sess
 		i.output = outputFromSession(sess)
-		i.renderer = lipgloss.NewRenderer(i.output)
+		i.renderer = lipgloss.NewRenderer(sess)
+
+		i.renderer.SetOutput(i.output)
 	}
 }
 
@@ -110,6 +112,12 @@ func WithWriter(w io.Writer) func(*Interpreter) {
 		i.output = termenv.NewOutput(w)
 		i.renderer = lipgloss.NewRenderer(i.output)
 	}
+}
+
+// Session returns the SSH session associated with the interpreter. If the session
+// is not set, Session returns nil.
+func (i *Interpreter) Session() ssh.Session {
+	return i.session
 }
 
 // RegisterToken registers a new token with the interpreter. The token name is
@@ -165,12 +173,7 @@ func (interpreter *Interpreter) RenderTemplate(filename string, vars map[string]
 
 	output := interpreter.interpret(string(data), vars, []string{filename})
 
-	if interpreter.session != nil {
-		wish.WriteString(interpreter.session, output)
-		return nil
-	}
-
-	io.WriteString(interpreter.output, output)
+	io.WriteString(interpreter.session, output)
 	return nil
 }
 
