@@ -1,3 +1,31 @@
+// Package mecca provides a MECCA language interpreter for creating terminal-based
+// user interfaces. MECCA (originally designed for Maximus BBS software) is a simple,
+// easy-to-learn templating language designed for non-programmers to create interactive
+// terminal content.
+//
+// This implementation provides a subset of the original MECCA language, adapted for
+// modern Go applications using the lipgloss library for rendering. It's designed to
+// work with the bubbletea framework in modern BBS software.
+//
+// The interpreter processes MECCA templates containing tokens enclosed in square
+// brackets, such as [red], [bold], [user], etc. Tokens can be used for colors, text
+// styling, cursor movement, file inclusion, and custom functionality through
+// registered tokens.
+//
+// Basic Usage:
+//
+//	interpreter := mecca.NewInterpreter()
+//	interpreter.ExecString("[bold][red]Hello, World![reset]", nil)
+//
+// With custom tokens:
+//
+//	interpreter := mecca.NewInterpreter()
+//	interpreter.RegisterToken("user", func(args []string) string {
+//		return "John Doe"
+//	}, 0)
+//	interpreter.ExecString("Welcome, [user]!", nil)
+//
+// See the README.md file for complete documentation of all supported tokens.
 package mecca
 
 import (
@@ -9,6 +37,7 @@ import (
 	"path"
 	"strconv" // new import for locate token
 	"strings"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
@@ -19,7 +48,8 @@ import (
 	"golang.org/x/text/encoding/charmap"
 )
 
-// Updated colorMapping to use ANSI 16-color codes.
+// colorMapping maps color names to their ANSI 16-color codes for use with lipgloss.
+// Supported colors include the standard 8 colors and their light variants.
 var colorMapping = map[string]lipgloss.Color{
 	"black":        lipgloss.Color("0"),
 	"red":          lipgloss.Color("1"),
@@ -39,7 +69,11 @@ var colorMapping = map[string]lipgloss.Color{
 	"lightwhite":   lipgloss.Color("15"),
 }
 
-// Create a termenv.Output from the session.
+// outputFromSession creates a termenv.Output from an SSH session.
+// This bridges the SSH session with termenv's output capabilities, allowing
+// the interpreter to query terminal capabilities and render output appropriately
+// for the remote terminal. The function uses unsafe mode since we already know
+// the session is a TTY.
 func outputFromSession(sess ssh.Session) *termenv.Output {
 	sshPty, _, _ := sess.Pty()
 	_, tty, err := pty.Open()
@@ -69,6 +103,7 @@ func NewInterpreter(options ...func(*Interpreter)) *Interpreter {
 		renderer:      lipgloss.NewRenderer(os.Stdout),
 		output:        termenv.NewOutput(os.Stdout),
 		tokenRegistry: make(map[string]Token),
+		styleStack:    []lipgloss.Style{},
 	}
 
 	for _, option := range options {
@@ -120,10 +155,28 @@ func (i *Interpreter) Session() ssh.Session {
 	return i.session
 }
 
-// RegisterToken registers a new token with the interpreter. The token name is
-// case-insensitive. The token function is called with the token's arguments and
-// should return the substitution string. You can use a type method as a token
-// function, as shown in the example.
+// RegisterToken registers a new custom token with the interpreter. The token
+// name is case-insensitive. When the token is encountered in a MECCA template,
+// the provided function is called with the token's arguments and should return
+// the substitution string.
+//
+// The argCount parameter specifies how many arguments the token expects. If a
+// token is used with fewer arguments than specified, the function will receive
+// an empty slice.
+//
+// You can use a type method as a token function. Registered tokens can be
+// overridden by variables passed at execution time with the same name.
+//
+// This function will panic if a token with the same name is already registered.
+//
+// Example:
+//
+//	type Server struct {
+//		user string
+//	}
+//	server := &Server{user: "Alice"}
+//	interpreter.RegisterToken("user", server.userToken, 0)
+//	// Now [user] in templates will be replaced with "Alice"
 func (i *Interpreter) RegisterToken(name string, fn TokenFunc, argCount int) {
 	if _, ok := i.tokenRegistry[strings.ToLower(name)]; ok {
 		panic(fmt.Sprintf("token %s already registered", name))
@@ -135,15 +188,31 @@ func (i *Interpreter) RegisterToken(name string, fn TokenFunc, argCount int) {
 	}
 }
 
-// GetToken retrieves a token by name. The name is case-insensitive.
+// GetToken retrieves a registered token by name. The name is case-insensitive.
+// Returns the token and a boolean indicating whether the token was found.
+// This is primarily used internally but can be useful for introspection.
 func (i *Interpreter) GetToken(name string) (Token, bool) {
 	token, ok := i.tokenRegistry[strings.ToLower(name)]
 	return token, ok
 }
 
 // ExecTemplate reads a template file from the template root directory and
-// executes it. The filename is relative to the template root directory.
-// Returns the rendered output or an error if the file cannot be read.
+// executes it, returning the rendered output as a string. The filename is
+// resolved relative to the template root directory set when creating the
+// interpreter.
+//
+// Returns the rendered output string and an error if the file cannot be read.
+// Unlike RenderTemplate, this method returns the output rather than writing
+// it directly to the output writer, making it useful when you need to process
+// or modify the output before displaying it.
+//
+// Example:
+//
+//	output, err := interpreter.ExecTemplate("welcome.mec", map[string]any{"user": "Alice"})
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	fmt.Print(output)
 func (interpreter *Interpreter) ExecTemplate(filename string, vars map[string]any) (string, error) {
 	templatePath := path.Join(interpreter.templateRoot, filename)
 	data, err := os.ReadFile(templatePath)
@@ -162,8 +231,18 @@ func (interpreter *Interpreter) ExecString(input string, vars map[string]any) {
 	io.WriteString(interpreter.output, interpreter.interpret(input, vars, []string{}))
 }
 
-// RenderFile reads a file relative to the template root directory and renders it
-// using the interpreter's writer. Returns an error if the file cannot be read.
+// RenderTemplate reads a template file from the template root directory and
+// renders it using the interpreter's output writer. The filename is resolved
+// relative to the template root directory set when creating the interpreter.
+//
+// Returns an error if the file cannot be read. The function handles both SSH
+// sessions and regular output writers, so it's safe to call even when the
+// interpreter was created without an SSH session.
+//
+// Example:
+//
+//	interpreter := mecca.NewInterpreter(mecca.WithTemplateRoot("templates"))
+//	err := interpreter.RenderTemplate("welcome.mec", map[string]any{"user": "Alice"})
 func (interpreter *Interpreter) RenderTemplate(filename string, vars map[string]any) error {
 	templatePath := path.Join(interpreter.templateRoot, filename)
 	data, err := os.ReadFile(templatePath)
@@ -173,13 +252,25 @@ func (interpreter *Interpreter) RenderTemplate(filename string, vars map[string]
 
 	output := interpreter.interpret(string(data), vars, []string{filename})
 
-	io.WriteString(interpreter.session, output)
+	if interpreter.session != nil {
+		wish.WriteString(interpreter.session, output)
+		return nil
+	}
+
+	io.WriteString(interpreter.output, output)
 	return nil
 }
 
 // RenderString processes the input string containing MECCA tokens and renders it
-// using the interpreter's writer. Any included templates are resolved relative to
-// the template root directory specified when creating the interpreter.
+// using the interpreter's output writer. Any included templates are resolved
+// relative to the template root directory specified when creating the interpreter.
+//
+// Unlike ExecString, this method uses wish.WriteString when an SSH session is
+// present, which provides better handling for SSH connections. For non-SSH usage,
+// ExecString and RenderString behave identically.
+//
+// The vars parameter can be used to pass variables that will override registered
+// tokens with the same name.
 func (interpreter *Interpreter) RenderString(input string, vars map[string]any) {
 	if interpreter.session != nil {
 		wish.WriteString(interpreter.session, interpreter.interpret(input, vars, []string{}))
@@ -194,6 +285,8 @@ func (interpreter *Interpreter) RenderString(input string, vars map[string]any) 
 func (interpreter *Interpreter) interpret(input string, vars map[string]any, includes []string) string {
 	output := ""
 	currentStyle := interpreter.renderer.NewStyle()
+	// Reset style stack for each interpretation
+	interpreter.styleStack = []lipgloss.Style{}
 	for {
 		start := strings.Index(input, "[")
 		if start == -1 {
@@ -206,6 +299,21 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 				}
 			}
 			break
+		}
+		// Check for escaped bracket ([[)
+		if start+1 < len(input) && input[start+1] == '[' {
+			// Process literal text before escaped bracket, including the first bracket
+			literal := input[:start+1] // Include first '['
+			lines := strings.Split(literal, "\n")
+			for i, line := range lines {
+				output += currentStyle.Render(line)
+				if i < len(lines)-1 {
+					output += "\n"
+				}
+			}
+			// Skip the second '[' and continue
+			input = input[start+2:]
+			continue
 		}
 		// Process literal text before token.
 		literal := input[:start]
@@ -236,9 +344,23 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 	return output
 }
 
-// processToken function to wrap returned token text with the current style.
+// processToken processes a single token's content, updating the style state and
+// returning the rendered output. Token content may contain multiple space-separated
+// tokens, which are processed in order.
+//
+// Supported tokens include:
+//   - Color tokens (e.g., [red], [#FF0000], [lightblue on white])
+//   - Style tokens (e.g., [bold], [underline], [blink])
+//   - Cursor control tokens (e.g., [locate 5 10], [up], [down])
+//   - File inclusion tokens (e.g., [include file.mec], [ansi file.ans])
+//   - Custom registered tokens
+//   - Variable substitutions
+//   - ASCII/UTF-8 code tokens (e.g., [65] for 'A', [U+00A9] for '©')
+//
+// The style parameter is modified in-place as tokens are processed. The function
+// returns the rendered output string for this token.
 func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string) string {
-	parts := strings.Fields(content)
+	parts := parseFieldsWithQuotes(content)
 	result := ""
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
@@ -254,6 +376,9 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			result += ansi.EraseLine(0)
 		case "blink": // [blink] token: blink text.
 			*style = style.Blink(true)
+			continue
+		case "steady": // [steady] token: cancel blink attribute.
+			*style = style.Blink(false)
 			continue
 		case "bright": // [bright] token: brighten text. (synonym for bold)
 			fallthrough
@@ -278,12 +403,22 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 		case "reset": // [reset] token: remove all styling.
 			*style = interpreter.renderer.NewStyle()
 			continue
-		case "locate": // [locate] token: expects two arguments.
+		case "save": // [save] token: save current color and style.
+			interpreter.styleStack = append(interpreter.styleStack, *style)
+			continue
+		case "load": // [load] token: restore saved color and style.
+			if len(interpreter.styleStack) > 0 {
+				*style = interpreter.styleStack[len(interpreter.styleStack)-1]
+				interpreter.styleStack = interpreter.styleStack[:len(interpreter.styleStack)-1]
+			}
+			continue
+		case "locate": // [locate] token: expects two arguments (row, column).
 			if i+2 < len(parts) {
-				col, err1 := strconv.Atoi(parts[i+1])
-				row, err2 := strconv.Atoi(parts[i+2])
+				row, err1 := strconv.Atoi(parts[i+1])
+				col, err2 := strconv.Atoi(parts[i+2])
 				if err1 == nil && err2 == nil {
 					// ANSI escape sequence: CSI row;colH (adding 1 for 1-indexing)
+					// README says: [locate <row> <column>]
 					result += ansi.CursorPosition(row+1, col+1)
 				}
 				i += 2
@@ -321,6 +456,24 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 					result += strings.Repeat(char, length)
 				}
 				i += 2
+			}
+			continue
+		case "on": // [ON <color>] token: set background color only (expects color argument).
+			if i+1 < len(parts) {
+				bgToken := strings.ToLower(parts[i+1])
+				if strings.HasPrefix(bgToken, "#") {
+					if len(bgToken) == 7 {
+						*style = style.Background(lipgloss.Color(bgToken))
+					} else {
+						// ANSI color code
+						if n, err := parseNumber(bgToken[1:]); err == nil {
+							*style = style.Background(lipgloss.Color(strconv.Itoa(n)))
+						}
+					}
+				} else if bg, ok := colorMapping[bgToken]; ok {
+					*style = style.Background(bg)
+				}
+				i++
 			}
 			continue
 		case "include": // [include] token: expects one argument.
@@ -448,7 +601,72 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 	return result
 }
 
-// isNumber checks if a string consists solely of digits.
+// parseFieldsWithQuotes parses a string into fields, respecting quoted arguments.
+// Quoted strings (e.g., "hello world") are treated as a single field, allowing
+// arguments to contain spaces. Escaped quotes within quoted strings are handled
+// correctly (e.g., "say \"hello\"").
+//
+// This function supports the MECCA language feature where token arguments can be
+// quoted if they contain spaces. Unquoted arguments are split on whitespace as
+// usual.
+//
+// Example: `token "hello world" arg2` parses to ["token", "hello world", "arg2"]
+func parseFieldsWithQuotes(s string) []string {
+	var fields []string
+	var current strings.Builder
+	inQuotes := false
+	bytes := []byte(s)
+	i := 0
+
+	for i < len(bytes) {
+		if bytes[i] == '"' {
+			if !inQuotes {
+				inQuotes = true
+			} else {
+				// End of quoted string
+				if current.Len() > 0 {
+					fields = append(fields, current.String())
+					current.Reset()
+				}
+				inQuotes = false
+			}
+			i++
+		} else if bytes[i] == '\\' && inQuotes && i+1 < len(bytes) && bytes[i+1] == '"' {
+			// Escaped quote inside quoted string
+			current.WriteByte('"')
+			i += 2 // Skip both backslash and quote
+		} else if bytes[i] == ' ' || bytes[i] == '\t' {
+			if !inQuotes {
+				if current.Len() > 0 {
+					fields = append(fields, current.String())
+					current.Reset()
+				}
+			} else {
+				current.WriteByte(bytes[i])
+			}
+			i++
+		} else {
+			// Decode UTF-8 rune
+			r, size := utf8.DecodeRune(bytes[i:])
+			if r != utf8.RuneError {
+				current.WriteRune(r)
+			} else {
+				current.WriteByte(bytes[i])
+			}
+			i += size
+		}
+	}
+
+	if current.Len() > 0 {
+		fields = append(fields, current.String())
+	}
+
+	return fields
+}
+
+// isNumber checks if a string consists solely of ASCII digits (0-9).
+// This is used to identify ASCII code tokens like [65] which should be
+// interpreted as ASCII character codes rather than token names.
 func isNumber(s string) bool {
 	for _, c := range s {
 		if c < '0' || c > '9' {
@@ -458,7 +676,9 @@ func isNumber(s string) bool {
 	return len(s) > 0
 }
 
-// parseNumber converts a numeric string to an integer.
+// parseNumber converts a numeric string to an integer. This is a simple
+// implementation that manually converts each digit, avoiding the overhead of
+// strconv.Atoi for the common case of small numbers used in MECCA tokens.
 func parseNumber(s string) (int, error) {
 	var n int
 	for _, c := range s {
@@ -467,7 +687,9 @@ func parseNumber(s string) (int, error) {
 	return n, nil
 }
 
-// decodeUTF8Token converts a hexadecimal string to a rune.
+// decodeUTF8Token converts a hexadecimal string to a rune. This is used to
+// process UTF-8 code tokens like [U+00A9] which should be converted to the
+// corresponding Unicode character (in this case, the copyright symbol ©).
 func decodeUTF8Token(hexStr string) (rune, error) {
 	var n int
 	_, err := fmt.Sscanf(hexStr, "%x", &n)
@@ -477,7 +699,9 @@ func decodeUTF8Token(hexStr string) (rune, error) {
 	return rune(n), nil
 }
 
-// isColorToken to check the colorMapping keys.
+// isColorToken checks if a string is a valid color token. A valid color token
+// is either a recognized color name (e.g., "red", "lightblue") or a hex color
+// code starting with "#" (e.g., "#FF0000" for true color, "#202" for 256-color).
 func isColorToken(s string) bool {
 	s = strings.ToLower(s)
 	if strings.HasPrefix(s, "#") {
@@ -487,6 +711,10 @@ func isColorToken(s string) bool {
 	return exists
 }
 
+// convertFromCharset converts text from a specified character encoding to UTF-8.
+// Currently supports CP437 (Code Page 437), which was commonly used in DOS
+// BBS systems. This is used by the [ansiconvert] token to convert ANSI art files
+// from their original encoding to UTF-8 for display.
 func convertFromCharset(input string, charset string) string {
 	var b bytes.Buffer
 	switch strings.ToLower(charset) {
