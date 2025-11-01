@@ -1,5 +1,7 @@
 # MECCA Language Reference
 
+> **⚠️ Beta Notice:** This package is currently in beta phase. The API should remain stable, but we want to get at least one BBS server working using it before promoting it to version 1.0.0. We welcome feedback and contributions!
+
 > **Note:** Parts of this document are based on the original MECCA documentation by Scott J. Dudley, and have been adapted for the Go interpretation of the MECCA language. The original documentation can be found in [max300.txt](./max300.txt) in this repository.
 
 ## Introduction
