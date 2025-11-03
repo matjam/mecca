@@ -1,0 +1,24 @@
+[cls]
+[bold][cyan]╔═══════════════════════════════════════════╗[reset]
+[bold][cyan]║                                           ║[reset]
+[bold][cyan]║         [lightblue]WELCOME TO THE MAIN MENU[cyan]          ║[reset]
+[bold][cyan]║                                           ║[reset]
+[bold][cyan]╚═══════════════════════════════════════════╝[reset]
+
+[menu]
+[bold][yellow]Please select an option:[reset]
+
+[white][option A] [bold][green]View Messages[reset]
+
+[white][option B] [bold][green]Read Email[reset]
+
+[white][option C] [bold][green]File Downloads[reset]
+
+[white][option D] [bold][green]User Directory[reset]
+
+[white][option E] [bold][green]Chat Room[reset]
+
+[white][option Q] [bold][green]Quit / Logout[reset]
+
+[bold][lightcyan]Your choice: [reset][menuwait]
+

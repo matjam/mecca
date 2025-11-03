@@ -1,0 +1,1739 @@
+                                               17. MECCA Language Reference
+
+             This chapter is a guide to the MECCA language.  For informa-
+             tion on the MECCA compiler itself, please see section 8.8.
+
+
+             17.1. Usage Guide
+
+             The MECCA language gives the SysOp a large amount of flexi-
+             bility when designing display screens. MECCA can be use to
+             embed personalized information about the user in text
+             screens, change the text color, run external programs, col-
+             lect answers to a questionnaire, and perform a variety of
+             other functions.
+
+             The input file for the MECCA compiler normally has a .mec ex-
+             tension and consists of plain ASCII text. The file can also
+             contain special MECCA tokens which are parsed and translated
+             by the MECCA compiler.
+
+             In MECCA, a token is delimited by a set of square brackets
+             ("[" and "]"). Anything outside of square brackets is treated
+             as text and is displayed to the user as-is. Different types
+             of tokens can be inserted in a MECCA file to achieve differ-
+             ent purposes. For example, the following line of text:
+
+                This is your [usercall] call to the system.
+
+             might be displayed by Maximus as follows, after being com-
+             piled with MECCA:
+
+                This is your 14th call to the system.
+
+             Other tokens can be used to display the user's name, show in-
+             formation about the current node, and perform conditional ac-
+             tions.
+
+             The MECCA compiler only processes tokens that are contained
+             inside of square brackets. (To include a left square bracket
+             in the output, simply insert two left brackets instead of
+             one. Only the left square bracket needs to be doubled.)
+
+             For example, to display the following line to a user:
+
+                Want to check for your mail [Y,n]?
+
+             Enter this inside a .mec file:
+
+                Want to check for your mail [[Y,n]?
+
+
+
+             17. MECCA Language Reference                              356
+
+             When using MECCA tokens, also keep these points in mind:
+
+             *  Tokens are not case-sensitive. That means that the follow-
+                ing tokens are equivalent in all respects:
+
+                [user]
+                [USER]
+                [UsEr]
+
+             *  Spaces are ignored. Inside MECCA tokens, any spaces, tabs
+                or newlines will have no effect. This means that the fol-
+                lowing tokens are equivalent in all respects:
+
+                [  user  ]
+                [    user]
+                [user    ]
+
+             *  More than one token can be inserted inside a set of square
+                brackets, as long as tokens are separated from each other
+                using spaces. For example, this line:
+
+                [lightblue][blink][user]
+
+                can also be written as follows:
+
+                [lightblue blink user]
+
+             MECCA also allows you to place ASCII codes into the compiled
+             .bbs file. To insert a specific ASCII code, simply enclose
+             the ASCII code number inside a pair of square brackets. For
+             example, the token [123] will be compiled to ASCII code 123
+             in the output file.
+
+             For conditional testing and flow control, MECCA also allows
+             you to define your own labels. When used with the [goto] to-
+             ken, labels allow your MECCA file to conditionally display
+             parts of the file, based on user input or other various other
+             conditions.
+
+             A label definition looks similar to an ordinary token, except
+             that the label name is preceded by a slash ("/"). The label
+             name must start with a letter, and it must contain only let-
+             ters, numbers, and underscores. The label name must also be
+             unique, and it cannot use the same name as any existing MECCA
+             token.
+
+             A sample label definition looks like this:
+
+                [/mylabel]
+
+             When referring to a label as part of a [goto] token, you must
+             omit the preceding slash. (The "/" instructs MECCA to mark
+
+
+
+             17. MECCA Language Reference                              357
+
+             the file location where the label is placed and use that
+             point as the target for future [goto] tokens.
+
+             Example #1. This MECCA file displays a prompt to the user and
+             requests a yes or no response. If the user answers "Y," Maxi-
+             mus displays c:\max\misc\games.bbs and asks the question
+             again. Otherwise, Maximus quits the current file. (These
+             MECCA tokens are all described in the following sections, so
+             concentrate on the [goto] and the label definitions for now.)
+
+                [/askgames]Want to play more games? [[Y,n]? [menu]YN
+                [choice]Y[link]C:\Max\Misc\Games
+                [choice]Y[goto askgames]
+                [choice]N[quit]
+
+             Example #2. This code demonstrates a forward-referenced la-
+             bel. The label is actually defined after the [goto] token
+             uses it:
+
+                Want a "Zippy the Pinhead" quote? [[y,n]? [menu]YN
+                [choice]Y[goto zippy]
+                [choice]N[quit]
+                [/zippy]
+                Okay, here's the quote!
+                [quote quit]
+
+             For more examples, look at some of the *.mec files in the
+             \max\hlp and \max\misc directories.
+
+
+             17.2. Color Token Listing
+
+             MECCA allows you to use up to 128 different color combina-
+             tions for displaying text. To display text in a different
+             color, simply enclose the name of the color in square brack-
+             ets. For example, [yellow] displays the following text in
+             yellow. (A complete list of permissible colors is given later
+             in this section.)
+
+             To display text on a colored background, use a token of the
+             form "fore on back"; foreground is the name of the foreground
+             color and background is the name of the background color.
+
+             For example, to display light green text on a blue back-
+             ground, enter this:
+
+                [lightgreen on blue]
+
+       Note! Only the first eight normal colors (see Table 17.1 below) can
+             be used for the background color. The colors beginning with
+             "light," "dark," "white" and "yellow") can only be used as
+             foreground colors.
+
+
+
+             17. MECCA Language Reference                              358
+
+             MECCA also supports blinking text. To make text blink, simply
+             insert the [blink] token after the color token. Text that
+             follows this token will blink. (A color token always resets a
+             previous [blink] token, so if you place the [blink] token im-
+             mediately before a color token, the [blink] token will have
+             no effect.)
+
+             For example, the following line displays blinking green text:
+
+                [green blink]Hello, world!
+
+             However, this line displays non-blinking text:
+
+                [blink green]Hello, world!
+
+             If the user has disabled ANSI or AVATAR graphics support,
+             Maximus will automatically strip out the color and cursor-
+             movement codes before transmitting the screen to the user.
+             Consequently, the same colorized screen can be shown to users
+             with either TTY or ANSI/AVATAR terminals.
+
+             Table 17.1 lists the colors supported by MECCA:
+
+             Table 17.1 MECCA Colors
+
+              Foreground and Background   Foreground only
+
+              [black]                     [darkgray]
+              [blue]                      [lightblue]
+              [green]                     [lightgreen]
+              [cyan]                      [lightcyan]
+              [red]                       [lightred]
+              [magenta]                   [lightmagenta]
+              [brown]                     [yellow]
+              [gray]                      [white]
+
+
+             Other tokens relating to colors are:
+
+             [BG <c>]
+
+                This token is a MECCA directive that modifies the current
+                background color without changing the foreground color. The
+                new background color is set to <c>.
+
+                For example, this code:
+
+                [red on blue]Hello, [BG green]user
+
+                displays the text "Hello," in red on blue, while it dis-
+                plays "user" in red on green.
+
+
+
+             17. MECCA Language Reference                              359
+
+             [blink] - ^v^b
+
+                Any text that follows this token will blink. The blinking
+                attribute is reset when Maximus encounters a color token.
+
+              [bright]
+
+                This token is a MECCA directive that sets the intensity bit
+                of the current color. If the current foreground color is on
+                the left hand side of Table 17.1, MECCA sets the new color
+                to the equivalent color on the right hand side of the ta-
+                ble.
+
+                For example, the following code:
+
+                [red]Is it not a [lightred]BEAUTIFUL DAY?
+
+                can be replaced with this simpler form:
+
+                [red]Is it not a [bright]BEAUTIFUL DAY?
+
+             [dim]
+
+                This token is a MECCA directive that disables the intensity
+                bit for the current color. Similar to the [bright] token,
+                it translates colors from the right hand side of the color
+                table to the equivalent color on the left hand side of the
+                table.
+
+                For example, this code:
+
+                [lightgreen]H[dim]e[bright]l[dim]l[bright]o[dim]!
+
+                displays the word "Hello!", with each character alternating
+                between normal green and light green.
+
+             [FG <c>]
+
+                This token is a MECCA directive that modifies the current
+                foreground color without changing the background color. The
+                new foreground color is set to <c>.
+
+                For example:
+
+                [lightred on blue]Hi, [FG yellow]Mr. Smith...
+
+                The above line displays the text "Hi," in lightred on blue,
+                and it displays the phrase "Mr. Smith" in yellow on blue.
+
+              [load]
+
+                This token is a MECCA directive which restores the color
+                that was previously saved using the [save] token.
+
+
+
+             17. MECCA Language Reference                              360
+
+                These two tokens are useful when creating screens with
+                backgrounds, since repeatedly typing two different colors
+                can get verbose. (To alternate between two colors, you can
+                save the first color by using [save], and after inserting
+                the command to change to another color, you can restore the
+                first color by inserting a [load] token.)
+
+                For example:
+
+                [yellow on blue save]This is yellow on blue.[cleol]
+                [lightred on green]This is lightred on green.[cleol]
+                [load]This text is also yellow on blue.[cleol]
+
+             [on]
+
+                This is a MECCA directive which tells MECCA to interpret
+                the next token as a background color. See the introduction
+                at the beginning of this section for more information.
+
+             [save]
+
+                This keyword is a MECCA directive that tells MECCA to save
+                the current color and store it for retrieval by the [load]
+                token.
+
+             [steady]
+
+                This keyword is a MECCA directive that disables a previous
+                [blink] token.
+
+                For example:
+
+                [yellow]This does not blink. [blink]This does.
+                [steady]However, this text is non-blinking.
+
+
+             17.3. Cursor Control and Video Tokens
+
+             This section describes video and terminal control commands
+             that can be used to move the cursor and manipulate the
+             caller's screen.
+
+              [bell] - ^g
+
+                This causes a beep (ASCII 07) to be generated on the user's
+                terminal.
+
+             [bs] - ^h
+
+                This causes a backspace (ASCII 08) to be generated on the
+                user's terminal. This token moves the cursor left by one
+                column.
+
+
+
+             17. MECCA Language Reference                              361
+
+             [cleol] - ^v^g
+
+                This instructs Maximus to send a clear to end of line com-
+                mand. If the current background color is non-black, the
+                rest of the line is set to that color.
+
+             [cleos] - ^v^o
+
+                This instructs Maximus to clear out part of the screen,
+                from the current cursor position to the end of the screen.
+                The cleared screen is set to the current color, and the
+                cursor position is not changed. This is not a true AVATAR
+                sequence, but Maximus will automatically generate the ap-
+                propriate commands to clear the screen.
+
+              [cls] - ^l
+
+                This clears the user's screen and sets the current color to
+                cyan.
+
+             [cr] - ^m
+
+                This sends a carriage return to the user.
+
+             [down] - ^v^d
+
+                This tells Maximus to move the cursor by down one row.
+
+             [left] - ^v^e
+
+                This moves the cursor one column to the left.
+
+             [lf] - ^j
+
+                This sends a linefeed to the user.
+
+             [locate <r> <c>] - ^v^h<r><c>
+
+                This command moves the cursor to the <r>th row and the
+                <c>th column of the screen. (The top left corner of the
+                screen is row 1, column 1.)
+
+             [tab] - ^i
+
+                This command sends a tab character to the user.
+
+             [right] - ^v^f
+
+                This moves the cursor one column to the right.
+
+
+
+             17. MECCA Language Reference                              362
+
+              [sysopbell] - ^w^g
+
+                This token sounds a beep on the local console. The beep is
+                not transmitted to the on-line user.
+
+              [up] - ^v^c
+
+                This moves the cursor up by one row.
+
+
+             17.4. Informational Tokens
+
+             Maximus includes a large number of tokens that display se-
+             lected information about the user and about the system in
+             general. Maximus supports the following informational tokens:
+
+              [alist_file] - ^rlF
+
+                Display the file area menu. If a Uses FileAreas file is de-
+                fined in the system control file, this token will display
+                it. Otherwise, Maximus will automatically build an area
+                list and display it to the user.
+
+             [alist_msg] - ^rlM
+
+                Display the message area menu. If a Uses MsgAreas file is
+                defined, this token will display it. Otherwise, Maximus
+                will automatically build an area list and display it to the
+                user.
+
+             [city] - ^f^c
+
+                Display the user's city.
+
+             [date] - ^f^d
+
+                Display the current date in the "dd mmm yy" format.
+
+             [dl] - ^f^x
+
+                Display the user's total number of kilobytes downloaded,
+                including today's downloads.
+
+             [expiry_date] - ^wyD
+
+                Display the user's current expiration date, or "None" if
+                the user has no expiration date.
+
+             [expiry_time] - ^wyT
+
+                This displays the time left in the current user's subscrip-
+                tion. If the user has time remaining, this token displays
+                "x minutes," where x is the number of minutes remaining in
+
+
+
+             17. MECCA Language Reference                              363
+
+                the user's subscription. If the user has no time subscrip-
+                tion, this token displays "None."
+
+             [file_carea] - ^w^fA
+
+                Display the name of the current file area.
+
+             [file_cname] - ^w^fN
+
+                Display the description for the current file area.
+
+              [file_darea] - ^w^fD
+
+                Display the name of the current file area division.
+
+              [file_sarea] - ^w^fd
+
+                Display the name of the current file area (without the di-
+                vision prefix).
+
+              [fname]
+             [first] - ^f^f
+
+                Display the user's first name.
+
+             [lastcall] - ^w^a
+
+                Display the date of the user's last call.
+
+             [lastuser] - ^w^k
+
+                Display the name of the last user to call the current node.
+                This information is read from the bbstat##.bbs file from
+                the Maximus system directory.
+
+              [length] - ^f^l
+
+                Display the duration of this user's call, in minutes.
+
+             [minutes] - ^f^k
+
+                Display the number of minutes for which the user has been
+                on-line during the last 24 hours.
+
+             [msg_carea] - ^w^mA
+
+                Display the name of the current message area.
+
+              [msg_cmsg] - ^w^mL
+
+                Display the current message number.
+
+
+
+             17. MECCA Language Reference                              364
+
+              [msg_cname] - ^w^mN
+
+                Display the description for the current message area.
+
+              [msg_darea] - ^w^mD
+
+                Display the name of the current message area division.
+
+              [msg_hmsg] - ^w^mH
+
+                Display the highest message number in the current area.
+
+              [msg_nummsg] - ^w^m#
+
+                Display the number of messages in the current area.
+
+             [msg_sarea] - ^w^md
+
+                Display the current message area (without the division pre-
+                fix).
+
+              [netbalance] - ^w^nB
+
+                Display the current user's matrix balance (credit minus
+                debit) in cents.
+
+             [netcredit] - ^w^nC
+
+                Display the current user's matrix credit in cents.
+
+             [netdebit] - ^w^nD
+
+                Display the current user's matrix debit in cents.
+
+             [netdl] - ^f^r
+
+                This displays the user's net downloads for today (today's
+                downloads minus today's uploads).
+
+             [node_num] - ^wjN
+
+                Display the current node number.
+
+             [phone] - ^wP
+
+                Display the user's phone number.
+
+             [ratio] - ^f^y
+
+                Display the current user's download ratio, in the format of
+                uploads:downloads.
+
+
+
+             17. MECCA Language Reference                              365
+
+             [realname] - ^wR
+
+                Display the user's real name (if applicable).
+
+             [remain] - ^f^o
+
+                Display the number of minutes that the user has left for
+                the current call.
+
+             [response] - ^w^e
+
+                Display the last line entered by the user for a [readln]
+                response. This token even works across files ---if one file
+                contain a [readln] token, the [response] token can be in-
+                serted in a separate file to display the result. See also
+                [ifentered].
+
+             [syscall] - ^f^q
+
+                Display the total number of calls that the current node has
+                received (as an ordinal number).
+
+              [sys_name] - ^r^c
+
+                Display the system name.
+
+             [sysop_name] - ^r^d
+
+                Display the SysOp's full name.
+
+              [time] - ^f^t
+
+                Display the current time in the format "hh:mm:ss".
+
+             [timeoff] - ^f^p
+
+                Displays the time by which the user must be off the system.
+                This string includes a newline at the end; unless you want
+                to have a blank line displayed in your output file, you
+                should not press <enter> immediately after entering this
+                token in the MECCA source file.
+
+             [ul] - ^f^w
+
+                Display the count of kilobytes uploaded, including today's
+                statistics.
+
+             [user] - ^f^b
+
+                Display the user's full name.
+
+
+
+             17. MECCA Language Reference                              366
+
+             [usercall] - ^f^e
+
+                Display the number of times the current user has called
+                your system (as an ordinal number).
+
+
+             17.5. Questionnaire Token Listing
+
+             The tokens in this section can be used to design on-line
+             questionnaires and to log information to a file. All of the
+             questionnaire tokens are described later in this section, but
+             most questionnaires will follow the general format given be-
+             low:
+
+             One of the first tokens in a questionnaire file should be the
+             [open] token. This token opens the specified filename for
+             output, and this is where Maximus logs all of the question-
+             naire answers. (This file is human-readable, so you can view
+             the file with a normal text editor.)
+
+             A [post] token normally follows the [open] token. The [post]
+             writes the user's name, city, and the current date/time to
+             the questionnaire file. (For an anonymous questionnaire, this
+             step can be omitted.)
+
+             You can then insert the main body of the questionnaire. The
+             [readln] token is used to request input from the user. All of
+             the input lines are written to the questionnaire file that
+             was opened using [open].
+
+             The [store] can also be used to store the response to a menu
+             displayed by [menu].
+
+             Finally, you can also use the [write] to write lines directly
+             to the questionnaire file. These lines can include external
+             program translation characters, as described in section 6.5.
+
+             You can place as many questions in a questionnaire as de-
+             sired. These questionnaire tokens can be placed in any .mec
+             file.
+
+             The following tokens are related to designing questionnaires:
+
+             [ansopt] - ^f^v
+
+                After this token is encountered, Maximus will not require
+                an answer for [menu] and [readln] tokens. The user can sim-
+                ply press <enter> to skip the prompt.
+
+              [ansreq] - ^f^u
+
+                After this token is encountered, Maximus will require an
+                answer for all [menu] and [readln] tokens.
+
+
+
+             17. MECCA Language Reference                              367
+
+             [choice]<c> - ^oU<c>
+
+                Display the rest of the current line only if the response
+                to the last [menu] choice is equal to the character <c>.
+
+             [leave_comment] - ^wK
+
+                Place the user in the message editor and allow the user to
+                write a message to the SysOp. The message is saved in the
+                area defined by Comment Area in the system control file.
+
+                If the message is aborted by the user, or if the message
+                saved by the user is blank, Maximus will skip the rest of
+                the line containing the [leave_comment] token.
+
+                This construct allow you to determine if the user entered a
+                message and react accordingly:
+
+                Please leave a comment to the SysOp, [fname].
+                [enter]
+                [/Do_Comment leave_comment goto Successful]
+
+                You did not leave a real message! Try again...
+                [enter goto Do_Comment]
+
+                [/Successful]Thanks for leaving a comment, [fname].
+
+             [menu]<k> - ^oR<k>
+
+                This token prompts the user to press a key. The value en-
+                tered by the user can be later manipulated using the
+                [choice] and [store] tokens.
+
+                <k> is a list of valid keys that the user can use to re-
+                spond to the menu. If the [ansopt] token is in effect, the
+                user can also press <enter> to skip the question.
+
+                If the user enters a key which is not in <k>, Maximus dis-
+                plays an error message and prompts the user to try again.
+                The characters in <k> can be any character between ASCII 33
+                and ASCII 126, including letters, numbers and punctuation
+                marks.
+
+              [open]<f> - ^oO<f>
+
+                This command instructs Maximus to open a questionnaire an-
+                swer file called <f>. See also [post], [store] and
+                [readln]. Maximus honors external program translation char-
+                acters in this filename.
+
+
+
+             17. MECCA Language Reference                              368
+
+             [post] - ^oP
+
+                Write the user's name, city, and the current time/date to
+                the questionnaire answer file.
+
+             [readln]<d> - ^oN<d>
+
+                Retrieve a line of input from the user, and then write it
+                to the questionnaire answer file, placing the optional one-
+                word description <d> beside the user's answer.
+
+                By default, the [readln] token allows stacked commands. For
+                example, if a user entered input that was not used by a
+                prior prompt, any remaining input in the key input buffer
+                will be read by the [readln] command. To disable this func-
+                tionality, include a [clear_stacked] token just before the
+                [readln] token.
+
+             [sopen]<f> - ^oo<f>
+
+                Open a questionnaire answer file called <f>. This token is
+                identical to the [open] token.
+
+              [store]<d> - ^oM<d>
+
+                Writes the user's response to the last [menu] token into
+                the questionnaire answer file, placing the optional one-
+                word description <d> beside the user's answer.
+
+             [write]<l> - ^wW<l>
+
+                Write the line <l> directly to the questionnaire answer
+                file, interpreting any external program translation charac-
+                ters contained within. Please see section 6.5 for more in-
+                formation.
+
+
+             17.6. Privilege Level Controls
+
+             These tokens allow certain parts of a MECCA file to be dis-
+             played or skipped, depending on the user's current privilege
+             level.
+
+             [?below], [?equal], [?file], [?line], [?xclude],[above],
+             [ae], [be], [below], [eq], [equal], [ge], [gt], [le], [lt],
+             [ne], [notequal], [unequal]
+
+                These keywords are obsolete. These keywords are only sup-
+                ported for compatibility with previous versions of Maximus.
+
+
+
+             17. MECCA Language Reference                              369
+
+             [acs <acs-string>]
+             [access <acs-string>] - ^pa<acs-string><space>
+
+                Display the rest of the line only if the user's access
+                level passes the ACS given by <acs-string>. Any type of ACS
+                test can be included here.
+
+             [acsfile <acs-string>]
+             [accessfile <acs-string>] - ^pf<acs-string><space>
+
+                Display the rest of the file only if the user's access
+                level passes the ACS given by <acs-string>. Any type of ACS
+                test can be included here.
+
+             [priv_abbrev] - ^vpa
+
+                Display the user's class level abbreviation. (For example,
+                this could display "SysOp" or "AsstSysOp," depending on the
+                definition in the access control file.)
+
+              [priv_desc] - ^vpd
+
+                Display the user's class level description, as defined in
+                the access control file.
+
+              [priv_down] - ^wpD
+
+                Lower the privilege level of the current user to that of
+                the next lower user class.
+
+             [priv_level] - ^vpl
+
+                Display the user's numeric privilege level.
+
+             [priv_up] - ^wpU
+
+                Raise the privilege level of the current user to that of
+                the next higher user class.
+
+              [setpriv <priv>] - ^ws?
+
+                Adjusts the current user's privilege level to a certain
+                value. <priv> should be the single-character key value as-
+                sociated with a user class defined in the access control
+                file.
+
+
+             17.7. Lock and Key Control
+
+             [ifkey]<keys> - ^wkI
+
+                If the specified keys are set, the rest of the line is dis-
+                played. Any number of keys can be specified, but they must
+
+
+
+             17. MECCA Language Reference                              370
+
+                be separated from the rest of the line by a space. For ex-
+                ample:
+
+                [ifkey]123a You have keys 1,2, 3 and A.
+
+             [notkey]<keys> - ^wkN
+
+                This token is similar to [ifkey], except that the line is
+                displayed only if the specified keys are not set.
+
+                For example:
+
+                [notkey]8b You have neither key 8 nor key b.
+
+             [keyon]<keys> - ^wkO
+
+                This command gives the specified keys to the user. <keys>
+                must be separated from the rest of the line with a space.
+
+                [keyon]6abc User, you now have keys A, B, C and 6.
+
+             [keyoff]<keys> - ^wkF
+
+                This command takes the specified keys away from the user.
+                <keys> must be separated from the rest of the line with a
+                space.
+
+                This command turns off the specified keys.
+
+                [keyoff]fgh User, keys F, G and H have been removed.
+
+             17.8. Conditional and Flow Control Tokens
+
+             These tokens allow you to conditionally display different
+             parts of a file, depending on various user attributes and
+             system settings.
+
+             [b1200] - ^w^b1
+
+                Display the rest of the line only if the user is connected
+                at 1200 bps or above.
+
+                Using this construct, you can use the [b1200] token to dis-
+                play a line only to users who are calling at a speed slower
+                than 1200 bps:
+
+                [b1200 goto FastUser]
+                You are a 300 baud user!
+                [goto Done]
+
+                [/FastUser]
+                You are a 1200 bps or above user!
+                [/Done]
+
+
+
+             17. MECCA Language Reference                              371
+
+
+             [b2400] - ^w^b2
+
+                Display the rest of the line only if the user is connected
+                at 2400 bps or above.
+
+             [b9600] - ^w^b9
+
+                Display the rest of the line only if the user is connected
+                at 9600 bps or above.
+
+             [col80] - ^w8
+
+                Display the rest of the line only if the user's screen is
+                at least 79 columns wide.
+
+             [color] - ^oE
+             [colour] - Canadian spelling of above
+
+                Display the following text (up to the next [endcolor] to-
+                ken), only if the user has ANSI or AVATAR graphics. See
+                also [nocolor].
+
+             [endcolor] - ^oe
+             [endcolour] - Canadian spelling of above
+
+                This token marks the end of a "color-only" display se-
+                quence. See also [color].
+
+             [endrip] - ^oI
+
+                This token marks the end of a "RIPscrip-only" display. See
+                also [rip].
+
+              [expert] - ^wHE
+
+                Display the rest of the line only if the user's current
+                help level is expert.
+
+             [exit] - ^wE
+
+                Exit all display files, including those which were dis-
+                played using a [link] token. See also [quit].
+
+              [filenew]<f> - ^wf
+
+                Display the rest of the current line if the file <f> is
+                newer than the user's last log-on date. The file <f> must
+                be separated from the rest of the line by a space. This
+                means that a construct such as this can be used to display
+                a file only if the user has not seen it before:
+
+
+
+             17. MECCA Language Reference                              372
+
+                [filenew]c:\max\misc\bulletin.bbs
+                [display]c:\max\misc\bulletin.bbs
+
+             [goto <l>] - ^oV
+
+                Jump to the label <l> in the current file.
+
+              [hotkeys] - ^rh
+
+                Display the rest of the current line only to those users
+                who have hotkeys enabled.
+
+              [ifentered]<s> - ^we<s>
+
+                This token compares <s> to the response given by the user
+                to the last [readln] token. If the two strings are equal,
+                the rest of the line is displayed. <s> is separated from
+                the rest of the line by a single space.
+
+                For example, given the following code:
+
+                What kind of yogurt do you like best? [readln]
+                [ifentered]peach You are a real peach!
+                [ifentered]lemon You are what you eat!
+
+                If the user enters "peach" at the prompt, Maximus will dis-
+                play "You are a real peach!" If the user enters "lemon,"
+                Maximus will display "You are what you eat!" If the user
+                entered neither string, Maximus would display nothing.
+
+             [ifexist]<filename> - ^wi<filename>
+
+                The rest of the line is displayed only if the file
+                <filename> exists. The filename must be separated from the
+                rest of the line by a space.
+
+             [iffse] - ^w^mE
+
+                Display the rest of the line only if the user has enabled
+                the full-screen editor.
+
+              [iffsr] - ^w^mR
+
+                Display the rest of the line only if the user has the full-
+                screen reader enabled.
+
+              [iflang]<l> - ^wB<l>
+
+                Display the rest of the line if the user's language is set
+                to language number <l>. The language number is 0-based, so
+                a "0" means the first language listed in the language con-
+                trol file, "1" means the second language, and so on.
+
+
+
+             17. MECCA Language Reference                              373
+
+             [iftask]<tasknum> - ^wb<tasknum>
+
+                Display the rest of the line if the current node is
+                <tasknum> (in decimal). The task number is separated from
+                the rest of the line by a space.
+
+             [iftime <op> <hh>:<mm>]
+
+                Display the rest of the line only if the current time of
+                day matches a specified condition.
+
+                <op> specifies the type of comparison operation to perform.
+                The supported operators are listed below in Table 17.2:
+
+                Table 17.2 [iftime] Operations
+
+                Operator            Description
+
+                EQ or EQUAL         Display the rest of the line only if
+                                    the current time equals hh:mm.
+                NE or NOTEQUAL      Display the rest of the line only if
+                                    the current time is not equal to hh:mm.
+                LT or BELOW         Display the rest of the line only if it
+                                    is currently earlier than (and not ex-
+                                    actly) hh:mm.
+                GT or ABOVE         Display the rest of the line only if it
+                                    is currently later than (and not ex-
+                                    actly) hh:mm.
+                GE or AE            Display the rest of the line only if it
+                                    is currently later than (or equal to)
+                                    hh:mm.
+                LE or BE            Display the rest of the line only if it
+                                    is earlier later than (or equal to)
+                                    hh:mm.
+
+
+                <hh> and <mm> tell Maximus which hour and minute to compare
+                with, specified in 24-hour format.
+
+                For example:
+
+                [iftime GE 20:00]It is after 8 pm!
+                [iftime GE 20:00 iftime LE 21:00]Between 8 and 9 pm.
+                [iftime LT 20:00 iftime NE 12:00]Before 8 & not 12.
+
+             [incity]<s> - ^wR
+
+                Display the rest of the line if the string <s> can be found
+                in the user's city field. <s> should be separated from the
+                rest of the line by a single space.
+
+                Example:
+
+
+
+             17. MECCA Language Reference                              374
+
+                [incity]Toronto Hi, [first]. You are a Torontonian!
+
+             [islocal] - ^wIL
+
+                Display the rest of the line only if the user is logged in
+                at the local console.
+
+             [isremote] - ^wIR
+
+                Display the rest of the line only if the user is logged in
+                from remote.
+
+             [jump] - ^oV
+
+                This token is a synonym for [goto].
+
+             [label <l>]
+
+                This token provides an alternate way to define a label. The
+                sequence "[label <l>]" is identical to "[/<l>]".
+
+             [maxed] - ^wm
+
+                Display the rest of the line only if the user is currently
+                in the MaxEd editor. This token can be useful when design-
+                ing a custom menu for the editor.
+
+              [msg_attr <letter>] - ^w^mB<letter>
+
+                This token displays the rest of the line only if the user
+                has sufficient access rights to create a message with the
+                specified attribute type.
+
+                <letter> must correspond to a character in the msgattr_keys
+                variable in the system language file. The default keys for
+                the English language are listed below in Table 17.3:
+
+                Table 17.3 [msg_attr] Keys
+
+                Key    Attribute
+
+                P      Private
+                C      Crash
+                R      Received
+                S      Sent
+                A      Attach (file)
+                F      Forward
+                O      Orphan
+                K      Kill/Sent
+                L      Local
+                H      Hold
+                X      Xx2 (undefined)
+                G      File Request
+
+
+
+             17. MECCA Language Reference                              375
+
+                !      Receipt Request
+                $      Return Receipt
+                T      Trail Request
+                U      Update Request
+
+
+                For example:
+
+                [          ]Key     Action
+                [          ]======= ==================================
+                [msg_attr P]P       To toggle the PRIVATE flag
+                [msg_attr C]C       To toggle crash status
+                [msg_attr A]A       To attach a file
+                [msg_attr R]R       To toggle the Received flag
+                [msg_attr S]S       To toggle the Sent flag
+                [msg_attr F]F       To toggle the Forward flag
+                [msg_attr O]O       To toggle the Orphan flag
+                [msg_attr K]K       To kill the message after packing
+                [msg_attr H]H       To keep message on hold for pickup
+                [msg_attr G]G       To request a file
+                [msg_attr !]!       To request a receipt
+                [msg_attr $]$       To toggle the receipt flag
+                [msg_attr T]T       To request a trail
+                [msg_attr U]U       To place an update request
+                [          ]<enter> To proceed to the next field
+                [white enter quit]
+
+             [msg_conf] - ^w^maC
+
+                Display the rest of the line only if the current message
+                area is a conference area.
+
+              [msg_echo] - ^w^maE
+
+                Display the rest of the line only if the current message
+                area is an EchoMail area.
+
+             [msg_fileattach] - ^w^mF
+
+                Display the rest of the line only if the user has pending
+                file attaches in the message area. This token will not de-
+                tect inbound FTS-0001 style attaches.
+
+                For example:
+
+                [msg_fileattach][yellow blink]You have files attached!
+
+              [msg_local] - ^w^maL
+
+                Display the rest of the line only if the current message
+                area is a local area.
+
+
+
+             17. MECCA Language Reference                              376
+
+              [msg_matrix] - ^w^maM
+
+                Display the rest of the line only if the current message
+                area is a NetMail area.
+
+             [msg_next] - ^w^miN
+
+                Display the rest of the line only if the current message-
+                reading direction is forward (as opposed to backward).
+
+             [msg_nomsgs] - ^w^mnM
+
+                Display the rest of the line only if the current message
+                area contains no messages.
+
+             [msg_nonew] - ^w^mnN
+
+                Display the rest of the line only if the current message
+                area does not contain any new messages.
+
+             [msg_noread] - ^w^mnR
+
+                Display the rest of the line only if the user has not read
+                any of the messages in the current message area.
+
+              [msg_prior] - ^w^miP
+
+                Display the rest of the line only if the current message-
+                reading direction is backward (as opposed to forward).
+
+              [no_keypress] - ^wG
+
+                Display the rest of the line only if there are no key-
+                strokes waiting in the input buffer. See also [nostacked].
+                This differs from [nostacked] in that [no_keypress] only
+                checks for currently-pending input which has not been proc-
+                essed, whereas [nostacked] checks for commands entered at a
+                previous prompt.
+
+             [nocolor] - ^o^^
+             [nocolour] - Canadian spelling of above
+
+                Display the following text (up to the next [endcolor] to-
+                ken) only to callers who do not have ANSI or AVATAR graph-
+                ics selected.
+
+             [norip] - ^oH
+
+                Display the following text (up to the next [endrip] token)
+                only to callers who do not have RIPscrip graphics selected.
+
+                For example:
+
+
+
+             17. MECCA Language Reference                              377
+
+                [norip]You are not a RIP caller![endrip]
+
+             [nostacked] - ^wS
+
+                Display the rest of the line only if there are no key-
+                strokes waiting in the key stacking buffer. See also
+                [no_keypress].
+
+             [notontoday] - ^wQ
+
+                Display the current line only if the user has not logged on
+                the system previously in the day. (The user must have been
+                logged on for at least one minute for this token to take
+                effect.)
+
+             [novice] - ^wHN
+
+                Display the current line only if the user's help level is
+                set to novice.
+
+             [ofs]
+
+                This token is obsolete.
+
+             [permanent] - ^wq
+
+                Display the current line only if the current user is marked
+                as being permanent. The permanent flag indicates that the
+                user should not deleted by any automatic, third-party user
+                purging utilities.
+
+              [regular] - ^wHR
+
+                Display the rest of the line only if the user has a help
+                level of regular.
+
+             [rip] - ^oG
+
+                Display the following text (up until the next [endrip] to-
+                ken) only to those users who have RIPscrip graphics en-
+                abled. Note that RIPscrip graphics are never shown on the
+                local console, regardless of the caller's RIPscrip setting.
+
+                [rip]You are a RIP caller![endrip]
+
+             [riphasfile]<name> [,<size>] - ^wY
+
+                Display the rest of the line only if the remote caller:
+
+                * has RIPscrip graphics enabled, and
+                * has already received the file <name> with a size of
+                  <size>.
+
+
+
+             17. MECCA Language Reference                              378
+
+                The ",<size>" part of the argument is optional. If a <size>
+                is provided, Maximus will also check the size of the file
+                on the remote system and ensure that it matches the speci-
+                fied size. If it does not, Maximus will act as if the file
+                did not exist.
+
+                The "<name>,<size>" argument must be separated from the
+                rest of the line by a space.
+
+                Example #1:
+
+                [riphasfile]m_menu.rip,872 |1R00000000m_menu.rip[quit]
+
+                This code queries the remote system for a file called
+                m_menu.rip that is 872 bytes in length. If the file exists,
+                Maximus displays the rest of the line (which contains the
+                RIPscrip sequence to display that file).
+
+                Example #2:
+
+                [riphasfile]m_menu.rip !|1R00000000m_menu.rip[goto quit-
+                file]
+                [link]rip\m_menu
+                [/quitfile]
+
+                This code queries the remote system for a file called
+                m_menu.rip (of any size). If the file exists, Maximus dis-
+                plays the rest of the line.
+
+                This token can be used in conjunction with the [ripsend]
+                token to allow users to optionally download all of the
+                RIPscrip scenes used on your BBS.
+
+              [tagged] - ^w^
+
+                Display the rest of the line only if the user has one or
+                more files currently tagged.
+
+              [top] - ^oT
+
+                Jump back to the top of the file and start the file display
+                over again.
+
+
+             17.9. Multinode Tokens
+
+             This section describes MECCA tokens that may be useful for
+             systems with more than one node:
+
+              [apb] - ^wA
+
+                This token sends a message to all users currently on-line,
+                assuming that the IPC features are enabled.
+
+
+
+             17. MECCA Language Reference                              379
+
+                Example #1:
+
+                [apb][yellow bell]%!User %n just logged on the system%!
+
+                Example #2:
+
+                Enter a message to send to all users: [readln]
+                [apb][yellow bell]%!User %n says "%J"%!
+
+             [chat_avail] - ^wcA
+
+                Display the rest of the line only if the user is available
+                for paging by other users.
+
+              [chat_notavail] - ^wcN
+
+                Display the rest of the line only if the user is not avail-
+                able for paging by other users.
+
+              [who_is_on] - ^ww
+
+                Execute the internal Who_Is_On menu command.
+
+
+             17.10. RIPscrip Graphics
+
+             This section describes tokens that are useful when creating
+             RIPscrip graphics displays. See also the [riphasfile], [rip],
+             [norip] and [endrip] tokens.
+
+             [ripdisplay]<file> - ^wv
+
+                Instruct the remote system to immediately display a
+                RIPscrip icon or scene file.
+
+                If the remote system does not have the specified file,
+                [ripdisplay] will automatically send it. Please see
+                [ripsend] for information on where Maximus looks to find
+                the file to be sent.
+
+              [rippath]<path> -^wU
+
+                Change the directory where Maximus looks to find RIPscrip
+                scene files and icons. The default is the RIP Path speci-
+                fied in the system control file.
+
+                For example:
+
+                [iflang]1 [rippath]C:\Max\Rip.1
+
+
+
+             17. MECCA Language Reference                              380
+
+             [ripsend]<file> - ^wV
+
+                Send one or more icons or RIPscrip scene files to the re-
+                mote system for storage only. These files must exist in the
+                RIP Path directory or the directory specified by the most
+                recent [rippath] token. (If the file does not exist in the
+                directory specified by [rippath], Maximus will look for the
+                file in the default RIP Path directory.)
+
+                If the filename specified for [ripsend] or [ripdisplay]
+                starts with "@", the file is assumed to be an ASCII file on
+                the local system that contains a list of files to be sent.
+
+                Otherwise, <file> must be a simple filename (with no path)
+                for a file in the current RIPscrip directory, as specified
+                by the RIP Path statement in the system control file.
+
+                If <file> starts with "!",Maximus ignores the fact that the
+                file may have already been sent during the current session,
+                and it will query the remote system anyway (and send the
+                file if the user does not have it).
+
+                Examples:
+
+                [ripsend]menu.rip f_icon.icn m_icon.icn
+
+                This line simply sends the named files.
+
+                [ripsend]@c:\max\allicons.lst
+
+                This line sends all files listed in the c:\max\allicons.lst
+                file.
+
+                [ripsend]!menu.rip f_icon.icn m_icon.icn
+
+                This line sends all files in the named list, regardless of
+                whether or not Maximus has sent them previously in the ses-
+                sion. (However, if the remote user has a matching file name
+                and size, Maximus will not send the file.)
+
+              [textsize <cols> <rows>] - ^wg
+
+                Set the assumed text window size of the remote system. This
+                token can be used to make "More [Y,n,=]?" prompts appear in
+                the correct position when working with a RIPscrip scene
+                that modifies the text window size.
+
+                Examples:
+
+                [textsize 0 0]
+
+                This resets the window size back to the default from the
+                user file.
+
+
+
+             17. MECCA Language Reference                              381
+
+                [textsize 60 0]
+
+                This sets the window width to 60 and sets the window height
+                to the default from the user file.
+
+                [textsize 0 32]
+
+                This sets the window height to 32 rows and sets the window
+                width to the default from the user file.
+
+                This MECCA command should be used whenever a called
+                RIPscrip scene reduces the size of the remote text window.
+
+
+             17.11. Miscellaneous Token Listing
+
+             This section contains miscellaneous MECCA tokens that are not
+             specific to one of the other sections:
+
+             [ckoff] - ^b
+
+                Disable <ctrl-c> and <ctrl-k> checking. This prevents the
+                user from using these keys to abort the current file.
+
+              [ckon] - ^c
+
+                Enable <ctrl-c> and <ctrl-k> checking. This allows the user
+                to press these keys to abort the current file.
+
+             [clear_stacked] - ^wO
+
+                Clear the user's command stacking buffer to eliminate any
+                previously-stacked commands.
+
+             [comment <c>]
+
+                This token is a comment. Anything enclosed in a comment to-
+                ken is ignored by the MECCA compiler.
+
+              [copy <f>]
+
+                This token is a MECCA directive. When MECCA encounters this
+                token, it copies the file <f> directly into the output
+                file, without performing any translations or parsing. En-
+                sure that the filename <f> is inside the square brackets.
+
+              [decimal]
+
+                This token is obsolete.
+
+
+
+             17. MECCA Language Reference                              382
+
+             [delete]<f> - ^wD<f>
+
+                Delete file <f> from disk. External program translation
+                characters may be used here.
+
+              [display]<f> - ^oS<f>
+
+                Display the named .bbs file. Control is not returned to the
+                current file after <f> has displayed. External program
+                translation characters may be used in the filename for <f>,
+                but you must use a "+" instead of a "%" to begin the trans-
+                lation sequence. See also [link].
+
+              [dos]<c> - ^oC<c>
+
+                Run the operating system command <c>. This command can in-
+                clude arguments and external program translation charac-
+                ters. See also [xtern_*].
+
+              [enter] - ^a
+
+                Display "Press ENTER to continue" and wait for the user to
+                press <enter>.
+
+              [hangup] - ^f^n
+
+                Hang up and disconnect the current user.
+
+              [hex]
+
+                This token is obsolete.
+
+             [ibmchars] - ^wd
+
+                Display the rest of the line only to those users who have
+                the IBM Characters option enabled.
+
+              [include <f>]
+
+                This token is a MECCA directive. MECCA reads in the file
+                <f> and processes it as if it were part of the current
+                file.
+
+             [key?]
+
+                This token is obsolete.
+
+              [key_poke]<keys> - ^wP
+
+                Insert keystrokes into the keyboard command-stacking
+                buffer, just as if the user had entered the keys manually.
+                This token can be used to automatically guide a user
+                through several commands at once.
+
+
+
+             17. MECCA Language Reference                              383
+
+                The <keys> sequence can include a "|" character. This char-
+                acter will be translated into an empty response.
+
+                For example, the following MECCA sequence skips over the
+                "enter date:" prompt in the new files scan:
+
+                [key_poke]|
+                [newfiles]
+
+             [language]  - ^oL
+
+                Invoke the internal Chg_Language menu option.
+
+             [link]<f> - ^wL
+
+                Display the specified .bbs file. Control is returned to the
+                current display file after <f> has displayed. Up to 8 dis-
+                play files can be nested using the [link] token.
+
+              [log]<s> - ^wA<s>
+
+                Add the statement <s> to the system log. The first charac-
+                ter of <s> must be the log "priority level" for the left-
+                hand column of the log. The rest of <s> is the log string
+                to insert. External program translation characters can also
+                be inserted in this string.
+
+                For example:
+
+                [log]+User's name is "%n"
+
+              [menu_cmd <s>]<arg> - ^rr
+
+                Invoke the menu command specified by <s>.
+
+                For example, [menu_cmd goodbye] invokes the "Goodbye" menu
+                option. Please see section 18.8 for a list of valid menu
+                options.
+
+              [menupath]<p> - ^wM<p>
+
+                Sets the current path for *.mnu files to <p>.
+
+             [mex]<file> - ^wn
+
+                Run the MEX program specified by <file>. For example:
+
+                [mex]d:\path\filename arg1 arg2 arg3
+
+              [more] - ^d
+
+                Display a "More [Y,n,=]?" prompt.
+
+
+
+             17. MECCA Language Reference                              384
+
+             [moreoff] - ^k
+
+                Disable the automatic "More [Y,n,=]?" prompting feature.
+
+             [moreon] - ^e
+
+                Enable the automatic "More [Y,n,=]?" prompting feature.
+
+              [msg_checkmail] - ^wC
+
+                Invoke the internal mail checker.
+
+             [newfiles] - ^wF
+
+                Invoke a new files scan.
+
+              [onexit]<f> - ^oF<f>
+
+                This sets the On Exit filename for the current display
+                file. When the current file has finished displaying, Maxi-
+                mus will display the file indicated by <f>.
+
+              [pause] - ^f^g
+
+                Pause for half a second.
+
+             [quit] - ^oQ
+
+                Quit the current file immediately. If the current file was
+                displayed with a [link] token, this command will exit back
+                to the calling display file. See also [exit].
+
+             [quote] - ^f^a
+
+                Display the next quote from the file in the Uses Quote
+                definition in the system control file.
+
+             [repeat]<c>[<n>] - ^y<c><n>
+
+                Output a sequence of repeated bytes. Maximus will output
+                the character <c> a total of <n> times. The value for <n>
+                must normally be contained in square brackets.
+
+                For example, this text
+
+                [repeat]=[15]
+
+                displays the "=" character 15 times.
+
+             [repeatseq <len>]<s>[<n>] - ^v^y<len><s><n>
+
+                Repeat the text string <s> a total of <n> times. The string
+                <s> must have a length of <len>.
+
+
+
+             17. MECCA Language Reference                              385
+
+                For example:
+
+                [repeatseq 7]Hello! [10]
+
+                The above line displays the phrase "Hello!" followed by a
+                space (a total of ten times).
+
+             [string]
+             [subdir]
+             [unsigned]
+
+                These tokens are obsolete.
+
+              [tag_read]<filename> - ^wz
+
+                Read a list of tagged files from <filename>. The current
+                list of tagged files is destroyed.
+
+              [tag_write]<filename> - ^wZ
+
+                Write the current list of tagged files to <filename>. If no
+                filename is specified, Maximus writes the files to the file
+                specified by the default_tag_save field in the system lan-
+                guage file. External program translation characters may be
+                used in this string.
+
+              [tune]<name> - ^wu<name>
+
+                Play the specified tune from the tunes.bbs file on the lo-
+                cal console.
+
+                For example:
+
+                [tune]Yell1
+
+             [xtern_dos]<c> - ^wXD<c>
+             [xtern_erlvl]<c> - ^wXE<c>
+             [xtern_run]<c> - ^wXR<c>
+
+                Run the external program <c>. If you wish to pass arguments
+                to the external program, simply add the arguments after the
+                name of the program to execute, separating each argument
+                with a space. Please see section 6 for more information on
+                running external programs with Maximus.

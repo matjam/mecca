@@ -98,12 +98,19 @@ func outputFromSession(sess ssh.Session) *termenv.Output {
 // template root directory and output writer by passing options to NewInterpreter.
 func NewInterpreter(options ...func(*Interpreter)) *Interpreter {
 	interpreter := &Interpreter{
-		templateRoot:  ".",
-		session:       nil,
-		renderer:      lipgloss.NewRenderer(os.Stdout),
-		output:        termenv.NewOutput(os.Stdout),
-		tokenRegistry: make(map[string]Token),
-		styleStack:    []lipgloss.Style{},
+		templateRoot:     ".",
+		session:          nil,
+		renderer:         lipgloss.NewRenderer(os.Stdout),
+		output:           termenv.NewOutput(os.Stdout),
+		reader:           nil,
+		tokenRegistry:    make(map[string]Token),
+		styleStack:       []lipgloss.Style{},
+		menuOptions:      make(map[string]string),
+		menuResponse:     "",
+		inMenu:           false,
+		capturingOption:  false,
+		currentOptionID:  "",
+		optionTextBuffer: strings.Builder{},
 	}
 
 	for _, option := range options {
@@ -149,10 +156,28 @@ func WithWriter(w io.Writer) func(*Interpreter) {
 	}
 }
 
+// WithReader is a functional option to set the input reader for the interpreter.
+// The input reader is used for interactive features such as menus. When a [menuwait]
+// token is encountered, the interpreter reads from this reader to get user input.
+// The default reader is nil, which means interactive features will not work unless
+// a reader is provided.
+func WithReader(r io.Reader) func(*Interpreter) {
+	return func(i *Interpreter) {
+		i.reader = r
+	}
+}
+
 // Session returns the SSH session associated with the interpreter. If the session
 // is not set, Session returns nil.
 func (i *Interpreter) Session() ssh.Session {
 	return i.session
+}
+
+// MenuResponse returns the selected option ID from the most recent menu interaction.
+// This should be called after processing a template that contains a [menuwait] token.
+// Returns an empty string if no menu response has been recorded yet.
+func (i *Interpreter) MenuResponse() string {
+	return i.menuResponse
 }
 
 // RegisterToken registers a new custom token with the interpreter. The token
@@ -287,15 +312,30 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 	currentStyle := interpreter.renderer.NewStyle()
 	// Reset style stack for each interpretation
 	interpreter.styleStack = []lipgloss.Style{}
+	// Reset menu state for each interpretation
+	interpreter.menuOptions = make(map[string]string)
+	interpreter.menuResponse = ""
+	interpreter.inMenu = false
+	interpreter.capturingOption = false
+	interpreter.currentOptionID = ""
+	interpreter.optionTextBuffer.Reset()
 	for {
 		start := strings.Index(input, "[")
 		if start == -1 {
 			// Split literal text on newline, style each line then add newline back.
 			lines := strings.Split(input, "\n")
 			for i, line := range lines {
-				output += currentStyle.Render(line)
+				rendered := currentStyle.Render(line)
+				output += rendered
+				// If we're capturing option text, accumulate the plain text
+				if interpreter.capturingOption {
+					interpreter.optionTextBuffer.WriteString(line)
+				}
 				if i < len(lines)-1 {
 					output += "\n"
+					if interpreter.capturingOption {
+						interpreter.optionTextBuffer.WriteString("\n")
+					}
 				}
 			}
 			break
@@ -319,9 +359,17 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 		literal := input[:start]
 		lines := strings.Split(literal, "\n")
 		for i, line := range lines {
-			output += currentStyle.Render(line)
+			rendered := currentStyle.Render(line)
+			output += rendered
+			// If we're capturing option text, accumulate the plain text
+			if interpreter.capturingOption {
+				interpreter.optionTextBuffer.WriteString(line)
+			}
 			if i < len(lines)-1 {
 				output += "\n"
+				if interpreter.capturingOption {
+					interpreter.optionTextBuffer.WriteString("\n")
+				}
 			}
 		}
 		end := strings.Index(input[start:], "]")
@@ -338,9 +386,43 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 			break
 		}
 		tokenContent := input[start+1 : start+end]
-		output += interpreter.processToken(tokenContent, &currentStyle, vars, includes)
+		// Check if this is a menuwait token before processing (we need to flush first)
+		parts := parseFieldsWithQuotes(tokenContent)
+		isMenuWait := len(parts) > 0 && strings.ToLower(parts[0]) == "menuwait"
+
+		// If it's menuwait, flush accumulated output first before processing
+		if isMenuWait && interpreter.reader != nil {
+			if interpreter.session != nil {
+				wish.WriteString(interpreter.session, output)
+			} else {
+				io.WriteString(interpreter.output, output)
+			}
+			output = ""
+		}
+
+		tokenResult, shouldFlush := interpreter.processToken(tokenContent, &currentStyle, vars, includes, output)
+		output += tokenResult
+
+		// If we need to flush output after processing (shouldn't happen with menuwait since we flush before)
+		if shouldFlush {
+			if interpreter.session != nil {
+				wish.WriteString(interpreter.session, output)
+			} else {
+				io.WriteString(interpreter.output, output)
+			}
+			output = ""
+		}
 		input = input[start+end+1:]
 	}
+
+	// If we're still capturing an option at the end, save it
+	if interpreter.capturingOption && interpreter.currentOptionID != "" {
+		interpreter.menuOptions[interpreter.currentOptionID] = strings.TrimSpace(interpreter.optionTextBuffer.String())
+		interpreter.capturingOption = false
+		interpreter.currentOptionID = ""
+		interpreter.optionTextBuffer.Reset()
+	}
+
 	return output
 }
 
@@ -353,15 +435,18 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 //   - Style tokens (e.g., [bold], [underline], [blink])
 //   - Cursor control tokens (e.g., [locate 5 10], [up], [down])
 //   - File inclusion tokens (e.g., [include file.mec], [ansi file.ans])
+//   - Menu tokens (e.g., [menu], [option a "Option A"], [menuwait])
 //   - Custom registered tokens
 //   - Variable substitutions
 //   - ASCII/UTF-8 code tokens (e.g., [65] for 'A', [U+00A9] for '©')
 //
 // The style parameter is modified in-place as tokens are processed. The function
-// returns the rendered output string for this token.
-func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string) string {
+// returns the rendered output string for this token and a boolean indicating whether
+// output should be flushed (for interactive tokens like [menuwait]).
+func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string, accumulatedOutput string) (string, bool) {
 	parts := parseFieldsWithQuotes(content)
 	result := ""
+	shouldFlush := false
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
 		// Handle special tokens.
@@ -402,6 +487,13 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			continue
 		case "reset": // [reset] token: remove all styling.
 			*style = interpreter.renderer.NewStyle()
+			// If we were capturing an option, end the capture and save it
+			if interpreter.capturingOption && interpreter.currentOptionID != "" {
+				interpreter.menuOptions[interpreter.currentOptionID] = strings.TrimSpace(interpreter.optionTextBuffer.String())
+				interpreter.capturingOption = false
+				interpreter.currentOptionID = ""
+				interpreter.optionTextBuffer.Reset()
+			}
 			continue
 		case "save": // [save] token: save current color and style.
 			interpreter.styleStack = append(interpreter.styleStack, *style)
@@ -484,7 +576,7 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				for _, inc := range includes {
 					if inc == filename {
 						result += fmt.Sprintf("[ERROR: %s included recursively]", filename)
-						return result
+						return result, shouldFlush
 					}
 				}
 
@@ -523,6 +615,60 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				}
 
 				i += 2
+			}
+			continue
+		case "menu": // [menu] token: starts a new menu, clearing any existing options.
+			interpreter.inMenu = true
+			interpreter.menuOptions = make(map[string]string)
+			continue
+		case "option": // [option option_id] token: starts capturing option text until [reset].
+			if i+1 < len(parts) {
+				optionID := strings.ToLower(parts[i+1])
+
+				// Validate option_id: must be a single alphanumeric character
+				if len(optionID) == 1 && isValidOptionID(optionID) {
+					// If we were already capturing an option, save it first
+					if interpreter.capturingOption && interpreter.currentOptionID != "" {
+						interpreter.menuOptions[interpreter.currentOptionID] = strings.TrimSpace(interpreter.optionTextBuffer.String())
+						interpreter.optionTextBuffer.Reset()
+					}
+					// Start capturing this option
+					interpreter.capturingOption = true
+					interpreter.currentOptionID = optionID
+					// Display the option ID in the current style
+					result += style.Render(strings.ToUpper(optionID))
+				} else {
+					result += style.Render(fmt.Sprintf("[ERROR: invalid option_id %s, must be single alphanumeric character]", parts[i+1]))
+				}
+				i++
+			}
+			continue
+		case "menuwait": // [menuwait] token: waits for user input and reads the selected option.
+			if interpreter.reader == nil {
+				result += style.Render("[ERROR: no reader configured, use WithReader() option]")
+				continue
+			}
+
+			// Signal that output should be flushed before waiting for input
+			shouldFlush = true
+
+			// Read a single character from the reader
+			// This will happen after the accumulated output is flushed
+			buf := make([]byte, 1)
+			n, err := interpreter.reader.Read(buf)
+			if err != nil || n == 0 {
+				interpreter.menuResponse = ""
+				continue
+			}
+
+			// Convert to lowercase for case-insensitive matching
+			inputChar := strings.ToLower(string(buf[0]))
+
+			// Check if the input matches any option ID
+			if _, ok := interpreter.menuOptions[inputChar]; ok {
+				interpreter.menuResponse = inputChar
+			} else {
+				interpreter.menuResponse = ""
 			}
 			continue
 		}
@@ -565,40 +711,60 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 		// Handle UTF-8 tokens [U+xxxx]
 		if strings.HasPrefix(part, "U+") && len(part) > 2 {
 			if r, err := decodeUTF8Token(part[2:]); err == nil {
-				result += style.Render(string(r))
+				text := string(r)
+				result += style.Render(text)
+				// If capturing option text, capture the plain text
+				if interpreter.capturingOption {
+					interpreter.optionTextBuffer.WriteString(text)
+				}
 				continue
 			}
 		} else if isNumber(part) {
 			// Handle ASCII token from a number.
 			if n, err := parseNumber(part); err == nil {
-				result += style.Render(string(rune(n)))
+				text := string(rune(n))
+				result += style.Render(text)
+				// If capturing option text, capture the plain text
+				if interpreter.capturingOption {
+					interpreter.optionTextBuffer.WriteString(text)
+				}
 				continue
 			}
 		}
 		// Handle variable tokens.
 		if vars != nil {
 			if val, ok := vars[part]; ok {
-				result += style.Render(fmt.Sprintf("%v", val))
+				text := fmt.Sprintf("%v", val)
+				result += style.Render(text)
+				// If capturing option text, capture the plain text
+				if interpreter.capturingOption {
+					interpreter.optionTextBuffer.WriteString(text)
+				}
 				continue
 			}
 		}
 		// Look up registered tokens.
 		if token, ok := interpreter.GetToken(part); ok {
+			var text string
 			if token.ArgCount > 0 && i+token.ArgCount < len(parts) {
 				args := parts[i+1 : i+1+token.ArgCount]
-				tokenOut := token.Func(args)
-				result += style.Render(tokenOut)
+				text = token.Func(args)
+				result += style.Render(text)
 				i += token.ArgCount
 			} else {
-				tokenOut := token.Func([]string{})
-				result += style.Render(tokenOut)
+				text = token.Func([]string{})
+				result += style.Render(text)
+			}
+			// If capturing option text, capture the plain text
+			if interpreter.capturingOption {
+				interpreter.optionTextBuffer.WriteString(text)
 			}
 			continue
 		}
 		// If token is unrecognized, emit an error message inline.
 		result += style.Render(fmt.Sprintf("[UNRECOGNIZED TOKEN \"%s\"]", part))
 	}
-	return result
+	return result, shouldFlush
 }
 
 // parseFieldsWithQuotes parses a string into fields, respecting quoted arguments.
@@ -709,6 +875,16 @@ func isColorToken(s string) bool {
 	}
 	_, exists := colorMapping[s]
 	return exists
+}
+
+// isValidOptionID checks if a string is a valid menu option ID.
+// A valid option ID is a single alphanumeric character (a-z, A-Z, 0-9).
+func isValidOptionID(s string) bool {
+	if len(s) != 1 {
+		return false
+	}
+	c := s[0]
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // convertFromCharset converts text from a specified character encoding to UTF-8.

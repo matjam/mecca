@@ -1,6 +1,7 @@
 package mecca
 
 import (
+	"io"
 	"os"
 	"strings"
 
@@ -44,12 +45,19 @@ type Token struct {
 // and renders them to terminal output. Each interpreter maintains its own
 // template root directory, output configuration, and token registry.
 type Interpreter struct {
-	templateRoot  string              // Base directory for template file resolution
-	session       ssh.Session         // SSH session if rendering to remote terminal
-	renderer      *lipgloss.Renderer  // Lipgloss renderer for styling
-	output        *termenv.Output     // Terminal output for rendering
-	tokenRegistry map[string]Token    // Registry of custom registered tokens
-	styleStack    []lipgloss.Style    // Stack for [save]/[load] style functionality
+	templateRoot     string             // Base directory for template file resolution
+	session          ssh.Session        // SSH session if rendering to remote terminal
+	renderer         *lipgloss.Renderer // Lipgloss renderer for styling
+	output           *termenv.Output    // Terminal output for rendering
+	reader           io.Reader          // Reader for interactive input (menus, etc.)
+	tokenRegistry    map[string]Token   // Registry of custom registered tokens
+	styleStack       []lipgloss.Style   // Stack for [save]/[load] style functionality
+	menuOptions      map[string]string  // Map of option_id -> option text for current menu
+	menuResponse     string             // The selected option_id from the menu
+	inMenu           bool               // Whether we're currently building a menu
+	capturingOption  bool               // Whether we're currently capturing option text
+	currentOptionID  string             // The option ID being captured
+	optionTextBuffer strings.Builder    // Buffer for the option text being captured
 }
 
 // sshOutput bridges an SSH session with termenv's output interface, allowing
