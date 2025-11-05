@@ -58,6 +58,48 @@ type Interpreter struct {
 	capturingOption  bool               // Whether we're currently capturing option text
 	currentOptionID  string             // The option ID being captured
 	optionTextBuffer strings.Builder    // Buffer for the option text being captured
+
+	// Interactive input and questionnaire data
+	readlnResponse    string   // Last response from [readln]
+	questionnaireData []string // Collected questionnaire responses
+	answerOptional    bool     // Whether answers are optional ([ansopt] / [ansreq])
+
+	// Flow control
+	labels        map[string]int // Map of label names to positions in input
+	shouldQuit    bool           // [quit] flag - exit current file
+	shouldExit    bool           // [exit] flag - exit all files
+	gotoTarget    string         // Target label for [goto]
+	shouldGotoTop bool           // [top] flag - jump to top of file
+
+	// File chaining
+	callStack     []fileContext // Call stack for [link] (nested file execution)
+	onExitFile    string        // File to execute on exit ([on exit] / [onexit])
+	shouldDisplay bool          // [display] flag - stop processing current file
+	displayFile   string        // File to display and then stop
+	linkFile      string        // File to link (process and return)
+	shouldLink    bool          // [link] flag - process file and return
+
+	// Conditional display
+	colorConditionStack []bool // Stack for [color]/[nocolor] nesting (true = show color, false = skip)
+
+	// More system
+	moreEnabled      bool   // Whether automatic more prompts are enabled
+	currentLine      int    // Current line position in terminal
+	terminalHeight   int    // Terminal height (lines), 0 = unknown
+	moreResponse     string // Last response from [more] prompt (Y/n/=)
+	lastMoreLine     int    // Line number where last more prompt was shown
+	shouldHandleMore bool   // Flag to handle [more] prompt after flushing
+}
+
+// fileContext holds the state of a file being processed, used for [link] call stack
+type fileContext struct {
+	input      string           // Original input string
+	vars       map[string]any   // Variables passed to this file
+	includes   []string         // Include chain for recursion detection
+	position   int              // Current position in input
+	output     string           // Accumulated output so far
+	style      lipgloss.Style   // Current style state
+	styleStack []lipgloss.Style // Style stack state
 }
 
 // sshOutput bridges an SSH session with termenv's output interface, allowing

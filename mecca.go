@@ -29,6 +29,7 @@
 package mecca
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
@@ -37,6 +38,7 @@ import (
 	"path"
 	"strconv" // new import for locate token
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
@@ -98,19 +100,40 @@ func outputFromSession(sess ssh.Session) *termenv.Output {
 // template root directory and output writer by passing options to NewInterpreter.
 func NewInterpreter(options ...func(*Interpreter)) *Interpreter {
 	interpreter := &Interpreter{
-		templateRoot:     ".",
-		session:          nil,
-		renderer:         lipgloss.NewRenderer(os.Stdout),
-		output:           termenv.NewOutput(os.Stdout),
-		reader:           nil,
-		tokenRegistry:    make(map[string]Token),
-		styleStack:       []lipgloss.Style{},
-		menuOptions:      make(map[string]string),
-		menuResponse:     "",
-		inMenu:           false,
-		capturingOption:  false,
-		currentOptionID:  "",
-		optionTextBuffer: strings.Builder{},
+		templateRoot:        ".",
+		session:             nil,
+		renderer:            lipgloss.NewRenderer(os.Stdout),
+		output:              termenv.NewOutput(os.Stdout),
+		reader:              nil,
+		tokenRegistry:       make(map[string]Token),
+		styleStack:          []lipgloss.Style{},
+		menuOptions:         make(map[string]string),
+		menuResponse:        "",
+		inMenu:              false,
+		capturingOption:     false,
+		currentOptionID:     "",
+		optionTextBuffer:    strings.Builder{},
+		readlnResponse:      "",
+		questionnaireData:   []string{},
+		answerOptional:      false,
+		labels:              make(map[string]int),
+		shouldQuit:          false,
+		shouldExit:          false,
+		gotoTarget:          "",
+		shouldGotoTop:       false,
+		callStack:           []fileContext{},
+		onExitFile:          "",
+		shouldDisplay:       false,
+		displayFile:         "",
+		linkFile:            "",
+		shouldLink:          false,
+		colorConditionStack: []bool{},
+		moreEnabled:         false,
+		currentLine:         0,
+		terminalHeight:      0,
+		moreResponse:        "",
+		lastMoreLine:        0,
+		shouldHandleMore:    false,
 	}
 
 	for _, option := range options {
@@ -178,6 +201,24 @@ func (i *Interpreter) Session() ssh.Session {
 // Returns an empty string if no menu response has been recorded yet.
 func (i *Interpreter) MenuResponse() string {
 	return i.menuResponse
+}
+
+// ReadlnResponse returns the last response from a [readln] token.
+// Returns an empty string if no [readln] response has been recorded yet.
+func (i *Interpreter) ReadlnResponse() string {
+	return i.readlnResponse
+}
+
+// QuestionnaireData returns all collected questionnaire responses.
+// This includes responses from [readln], [store], and any data added via [write].
+// Returns a slice of strings where each entry is a questionnaire line.
+func (i *Interpreter) QuestionnaireData() []string {
+	return i.questionnaireData
+}
+
+// ClearQuestionnaireData clears all collected questionnaire data.
+func (i *Interpreter) ClearQuestionnaireData() {
+	i.questionnaireData = []string{}
 }
 
 // RegisterToken registers a new custom token with the interpreter. The token
@@ -319,21 +360,88 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 	interpreter.capturingOption = false
 	interpreter.currentOptionID = ""
 	interpreter.optionTextBuffer.Reset()
-	for {
-		start := strings.Index(input, "[")
+	// Reset interactive state (but don't clear questionnaireData - it persists across calls)
+	interpreter.readlnResponse = ""
+	interpreter.shouldQuit = false
+	interpreter.shouldExit = false
+	interpreter.gotoTarget = ""
+	interpreter.shouldGotoTop = false
+	interpreter.colorConditionStack = []bool{}
+	// Don't reset more system state - it persists across interpretations
+	// But reset line counter for new interpretation
+	interpreter.currentLine = 0
+	interpreter.lastMoreLine = 0
+	interpreter.shouldHandleMore = false
+
+	// Get terminal height if not already set
+	if interpreter.terminalHeight == 0 {
+		interpreter.terminalHeight = interpreter.getTerminalHeight()
+	}
+
+	// Parse labels first (before processing tokens)
+	interpreter.labels = parseLabels(input)
+	originalInput := input
+	position := 0
+	skipToEndOfLine := false
+	skipLine := false
+
+	for position < len(originalInput) {
+		remainingInput := originalInput[position:]
+		start := strings.Index(remainingInput, "[")
 		if start == -1 {
 			// Split literal text on newline, style each line then add newline back.
-			lines := strings.Split(input, "\n")
+			// Check if we should skip output due to color conditionals
+			shouldSkip := false
+			if len(interpreter.colorConditionStack) > 0 {
+				for _, skip := range interpreter.colorConditionStack {
+					if skip {
+						shouldSkip = true
+						break
+					}
+				}
+			}
+
+			lines := strings.Split(remainingInput, "\n")
 			for i, line := range lines {
-				rendered := currentStyle.Render(line)
-				output += rendered
+				if !shouldSkip {
+					rendered := currentStyle.Render(line)
+					output += rendered
+					// Count lines for more system
+					interpreter.currentLine++
+
+					// Check for auto-more before adding newline
+					if i < len(lines)-1 {
+						if interpreter.checkAutoMore() {
+							// Flush output before prompting
+							if interpreter.session != nil {
+								wish.WriteString(interpreter.session, output)
+							} else {
+								io.WriteString(interpreter.output, output)
+							}
+							output = ""
+
+							// Handle more prompt
+							interpreter.handleMorePrompt()
+
+							// Check if user quit
+							if interpreter.shouldQuit {
+								return output
+							}
+						}
+						output += "\n"
+						interpreter.currentLine++
+					}
+				} else {
+					// Still count lines even when skipping (for accurate positioning)
+					interpreter.currentLine++
+					if i < len(lines)-1 {
+						interpreter.currentLine++
+					}
+				}
 				// If we're capturing option text, accumulate the plain text
 				if interpreter.capturingOption {
 					interpreter.optionTextBuffer.WriteString(line)
-				}
-				if i < len(lines)-1 {
-					output += "\n"
-					if interpreter.capturingOption {
+					if i < len(lines)-1 {
 						interpreter.optionTextBuffer.WriteString("\n")
 					}
 				}
@@ -341,33 +449,93 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 			break
 		}
 		// Check for escaped bracket ([[)
-		if start+1 < len(input) && input[start+1] == '[' {
+		if start+1 < len(remainingInput) && remainingInput[start+1] == '[' {
 			// Process literal text before escaped bracket, including the first bracket
-			literal := input[:start+1] // Include first '['
+			// Check if we should skip output due to color conditionals
+			shouldSkip := false
+			if len(interpreter.colorConditionStack) > 0 {
+				for _, skip := range interpreter.colorConditionStack {
+					if skip {
+						shouldSkip = true
+						break
+					}
+				}
+			}
+
+			literal := remainingInput[:start+1] // Include first '['
 			lines := strings.Split(literal, "\n")
 			for i, line := range lines {
-				output += currentStyle.Render(line)
+				if !shouldSkip {
+					output += currentStyle.Render(line)
+					interpreter.currentLine++
+				} else {
+					interpreter.currentLine++
+				}
 				if i < len(lines)-1 {
-					output += "\n"
+					if !shouldSkip {
+						output += "\n"
+					}
+					interpreter.currentLine++
 				}
 			}
 			// Skip the second '[' and continue
-			input = input[start+2:]
+			position = position + start + 2
 			continue
 		}
 		// Process literal text before token.
-		literal := input[:start]
+		// Check if we should skip output due to color conditionals
+		shouldSkip := false
+		if len(interpreter.colorConditionStack) > 0 {
+			for _, skip := range interpreter.colorConditionStack {
+				if skip {
+					shouldSkip = true
+					break
+				}
+			}
+		}
+
+		literal := remainingInput[:start]
 		lines := strings.Split(literal, "\n")
 		for i, line := range lines {
-			rendered := currentStyle.Render(line)
-			output += rendered
+			if !shouldSkip {
+				rendered := currentStyle.Render(line)
+				output += rendered
+				// Count lines for more system
+				interpreter.currentLine++
+
+				// Check for auto-more before adding newline
+				if i < len(lines)-1 {
+					if interpreter.checkAutoMore() {
+						// Flush output before prompting
+						if interpreter.session != nil {
+							wish.WriteString(interpreter.session, output)
+						} else {
+							io.WriteString(interpreter.output, output)
+						}
+						output = ""
+
+						// Handle more prompt
+						interpreter.handleMorePrompt()
+
+						// Check if user quit
+						if interpreter.shouldQuit {
+							return output
+						}
+					}
+					output += "\n"
+					interpreter.currentLine++
+				}
+			} else {
+				// Still count lines even when skipping (for accurate positioning)
+				interpreter.currentLine++
+				if i < len(lines)-1 {
+					interpreter.currentLine++
+				}
+			}
 			// If we're capturing option text, accumulate the plain text
 			if interpreter.capturingOption {
 				interpreter.optionTextBuffer.WriteString(line)
-			}
-			if i < len(lines)-1 {
-				output += "\n"
-				if interpreter.capturingOption {
+				if i < len(lines)-1 {
 					interpreter.optionTextBuffer.WriteString("\n")
 				}
 			}
@@ -375,23 +543,46 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 		end := strings.Index(input[start:], "]")
 		if end == -1 {
 			// unmatched token, render remainder as-is.
+			// Check if we should skip output due to color conditionals
+			shouldSkip := false
+			if len(interpreter.colorConditionStack) > 0 {
+				for _, skip := range interpreter.colorConditionStack {
+					if skip {
+						shouldSkip = true
+						break
+					}
+				}
+			}
+
 			remainder := input[start:]
-			lines = strings.Split(remainder, "\n")
+			lines := strings.Split(remainder, "\n")
 			for i, line := range lines {
-				output += currentStyle.Render(line)
+				if !shouldSkip {
+					output += currentStyle.Render(line)
+					interpreter.currentLine++
+				} else {
+					interpreter.currentLine++
+				}
 				if i < len(lines)-1 {
-					output += "\n"
+					if !shouldSkip {
+						output += "\n"
+					}
+					interpreter.currentLine++
 				}
 			}
 			break
 		}
-		tokenContent := input[start+1 : start+end]
+		tokenContent := remainingInput[start+1 : start+end]
+		tokenPos := position + start
+
 		// Check if this is a menuwait token before processing (we need to flush first)
 		parts := parseFieldsWithQuotes(tokenContent)
 		isMenuWait := len(parts) > 0 && strings.ToLower(parts[0]) == "menuwait"
+		isReadln := len(parts) > 0 && strings.ToLower(parts[0]) == "readln"
+		isEnter := len(parts) > 0 && strings.ToLower(parts[0]) == "enter"
 
-		// If it's menuwait, flush accumulated output first before processing
-		if isMenuWait && interpreter.reader != nil {
+		// Check for interactive tokens that need flushing
+		if (isMenuWait || isReadln || isEnter) && interpreter.reader != nil {
 			if interpreter.session != nil {
 				wish.WriteString(interpreter.session, output)
 			} else {
@@ -400,10 +591,46 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 			output = ""
 		}
 
-		tokenResult, shouldFlush := interpreter.processToken(tokenContent, &currentStyle, vars, includes, output)
-		output += tokenResult
+		tokenResult, shouldFlush, skipLineAfter := interpreter.processToken(tokenContent, &currentStyle, vars, includes, output, tokenPos, originalInput)
 
-		// If we need to flush output after processing (shouldn't happen with menuwait since we flush before)
+		// Handle [choice] conditional - skip rest of line if condition not met
+		if skipLineAfter {
+			skipToEndOfLine = true
+		}
+
+		// If we should skip to end of line
+		if skipToEndOfLine || skipLine {
+			// Find the rest of the line and skip to next newline
+			lineEnd := strings.Index(remainingInput[start+end+1:], "\n")
+			if lineEnd == -1 {
+				// No newline found, we're at the end
+				break
+			}
+			// Skip to after the newline
+			position = tokenPos + end + 1 + lineEnd + 1
+			skipLine = false
+			skipToEndOfLine = false
+			continue
+		}
+
+		// Check if we should skip output due to color conditionals
+		shouldSkipOutput := false
+		if len(interpreter.colorConditionStack) > 0 {
+			for _, skip := range interpreter.colorConditionStack {
+				if skip {
+					shouldSkipOutput = true
+					break
+				}
+			}
+		}
+
+		if !shouldSkipOutput {
+			output += tokenResult
+			// Count newlines in token result for more system
+			interpreter.currentLine += strings.Count(tokenResult, "\n")
+		}
+
+		// If we need to flush output after processing
 		if shouldFlush {
 			if interpreter.session != nil {
 				wish.WriteString(interpreter.session, output)
@@ -411,8 +638,136 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 				io.WriteString(interpreter.output, output)
 			}
 			output = ""
+
+			// Handle [more] prompt if needed
+			if interpreter.shouldHandleMore {
+				interpreter.handleMorePrompt()
+				interpreter.shouldHandleMore = false
+
+				// Check if user quit
+				if interpreter.shouldQuit {
+					return output
+				}
+			}
+		} else {
+			// Check for auto-more after accumulating output (but before flushing)
+			// Only check if we have enough content and more is enabled
+			if interpreter.checkAutoMore() && len(output) > 0 {
+				// Flush output before prompting
+				if interpreter.session != nil {
+					wish.WriteString(interpreter.session, output)
+				} else {
+					io.WriteString(interpreter.output, output)
+				}
+				output = ""
+
+				// Handle more prompt
+				interpreter.handleMorePrompt()
+
+				// Check if user quit
+				if interpreter.shouldQuit {
+					return output
+				}
+			}
 		}
-		input = input[start+end+1:]
+
+		// Handle [quit] - exit current file
+		if interpreter.shouldQuit {
+			break
+		}
+
+		// Handle [exit] - exit all files
+		if interpreter.shouldExit {
+			// Clear call stack and exit
+			interpreter.callStack = []fileContext{}
+			break
+		}
+
+		// Handle [display] - stop processing current file after displaying target
+		// Check this before [link] since [display] should stop immediately
+		if interpreter.shouldDisplay && interpreter.displayFile != "" {
+			// Process the display file
+			displayOutput := interpreter.processDisplayFile(interpreter.displayFile, vars, includes)
+			output += displayOutput
+			interpreter.shouldDisplay = false
+			interpreter.displayFile = ""
+			// Stop processing current file
+			break
+		}
+
+		// Handle [link] - process file and continue with current file
+		if interpreter.shouldLink && interpreter.linkFile != "" {
+			// Check call stack depth (max 8 levels)
+			if len(interpreter.callStack) >= 8 {
+				output += "[ERROR: link nesting too deep (max 8 levels)]"
+				interpreter.shouldLink = false
+				interpreter.linkFile = ""
+			} else {
+				// Save current context to call stack (before processing link)
+				ctx := fileContext{
+					input:      originalInput,
+					vars:       vars,
+					includes:   includes,
+					position:   position,
+					output:     output,
+					style:      currentStyle,
+					styleStack: make([]lipgloss.Style, len(interpreter.styleStack)),
+				}
+				copy(ctx.styleStack, interpreter.styleStack)
+				interpreter.callStack = append(interpreter.callStack, ctx)
+
+				// Process linked file
+				linkedOutput := interpreter.processLinkFile(interpreter.linkFile, vars, includes)
+				output += linkedOutput
+
+				// Restore context from call stack (but keep the accumulated output)
+				if len(interpreter.callStack) > 0 {
+					ctx = interpreter.callStack[len(interpreter.callStack)-1]
+					interpreter.callStack = interpreter.callStack[:len(interpreter.callStack)-1]
+
+					originalInput = ctx.input
+					vars = ctx.vars
+					includes = ctx.includes
+					// Don't restore position - we continue from after the [link] token
+					// Don't restore output - we've accumulated the linked output
+					currentStyle = ctx.style
+					interpreter.styleStack = ctx.styleStack
+				}
+
+				interpreter.shouldLink = false
+				interpreter.linkFile = ""
+				// Continue processing from after the [link] token
+				// (position will be updated at end of loop iteration)
+			}
+		}
+
+		// Handle [top] - jump to top of file
+		if interpreter.shouldGotoTop {
+			position = 0
+			interpreter.shouldGotoTop = false
+			// Re-parse labels when jumping to top
+			interpreter.labels = parseLabels(originalInput)
+			continue
+		}
+
+		// Handle [goto] - jump to label
+		if interpreter.gotoTarget != "" {
+			labelPos, ok := interpreter.labels[interpreter.gotoTarget]
+			if ok {
+				position = labelPos
+				interpreter.gotoTarget = ""
+				continue
+			}
+			// Label not found, continue normally
+			interpreter.gotoTarget = ""
+		}
+
+		// Check if we hit a newline - reset skipLine if we did
+		if strings.Contains(remainingInput[:start+end+1], "\n") {
+			skipLine = false
+		}
+
+		position = tokenPos + end + 1
 	}
 
 	// If we're still capturing an option at the end, save it
@@ -423,7 +778,61 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 		interpreter.optionTextBuffer.Reset()
 	}
 
+	// Handle [on exit] - execute exit file if set
+	if interpreter.onExitFile != "" {
+		exitOutput := interpreter.processDisplayFile(interpreter.onExitFile, vars, includes)
+		output += exitOutput
+		interpreter.onExitFile = ""
+	}
+
 	return output
+}
+
+// parseLabels scans the input and builds a map of label names to their positions.
+// Labels are defined as [/labelname] or [label labelname].
+func parseLabels(input string) map[string]int {
+	labels := make(map[string]int)
+	pos := 0
+
+	for pos < len(input) {
+		start := strings.Index(input[pos:], "[")
+		if start == -1 {
+			break
+		}
+		start += pos
+
+		// Check for escaped bracket
+		if start+1 < len(input) && input[start+1] == '[' {
+			pos = start + 2
+			continue
+		}
+
+		end := strings.Index(input[start:], "]")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		tokenContent := input[start+1 : end]
+		parts := parseFieldsWithQuotes(tokenContent)
+
+		if len(parts) > 0 {
+			firstPart := strings.ToLower(parts[0])
+			// Check for [/labelname] format
+			if strings.HasPrefix(firstPart, "/") && len(firstPart) > 1 {
+				labelName := strings.ToLower(firstPart[1:])
+				labels[labelName] = end + 1 // Position after the closing bracket
+			} else if firstPart == "label" && len(parts) > 1 {
+				// Check for [label labelname] format
+				labelName := strings.ToLower(parts[1])
+				labels[labelName] = end + 1
+			}
+		}
+
+		pos = end + 1
+	}
+
+	return labels
 }
 
 // processToken processes a single token's content, updating the style state and
@@ -436,17 +845,34 @@ func (interpreter *Interpreter) interpret(input string, vars map[string]any, inc
 //   - Cursor control tokens (e.g., [locate 5 10], [up], [down])
 //   - File inclusion tokens (e.g., [include file.mec], [ansi file.ans])
 //   - Menu tokens (e.g., [menu], [option a "Option A"], [menuwait])
+//   - Interactive tokens (e.g., [readln], [enter], [goto], [choice], [quit], [exit])
 //   - Custom registered tokens
 //   - Variable substitutions
 //   - ASCII/UTF-8 code tokens (e.g., [65] for 'A', [U+00A9] for '©')
 //
 // The style parameter is modified in-place as tokens are processed. The function
-// returns the rendered output string for this token and a boolean indicating whether
-// output should be flushed (for interactive tokens like [menuwait]).
-func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string, accumulatedOutput string) (string, bool) {
+// returns the rendered output string, a boolean indicating whether output should be
+// flushed (for interactive tokens), and a boolean indicating whether to skip the
+// rest of the line (for [choice]).
+func (interpreter *Interpreter) processToken(content string, style *lipgloss.Style, vars map[string]any, includes []string, accumulatedOutput string, tokenPos int, originalInput string) (string, bool, bool) {
 	parts := parseFieldsWithQuotes(content)
 	result := ""
 	shouldFlush := false
+	skipLineAfter := false
+
+	// Helper to check if we should skip output due to color conditionals
+	shouldSkipOutput := func() bool {
+		if len(interpreter.colorConditionStack) > 0 {
+			// If any level in the stack says to skip, skip
+			for _, skip := range interpreter.colorConditionStack {
+				if skip {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
 	for i := 0; i < len(parts); i++ {
 		part := parts[i]
 		// Handle special tokens.
@@ -484,6 +910,49 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			continue
 		case "strike": // [strike] token: strike through text.
 			*style = style.Strikethrough(true)
+			continue
+		case "bell": // [bell] token: beep (ASCII 07).
+			result += "\a"
+			continue
+		case "bs": // [bs] token: backspace (ASCII 08).
+			result += "\b"
+			continue
+		case "tab": // [tab] token: tab character (ASCII 09).
+			result += "\t"
+			continue
+		case "pause": // [pause] token: pause for half a second.
+			time.Sleep(500 * time.Millisecond)
+			continue
+		case "comment": // [comment <c>] token: comment - ignore content.
+			// Skip processing the rest of the token content
+			// Everything after "comment" is ignored
+			if i+1 < len(parts) {
+				// Skip the comment text
+				i = len(parts) - 1 // Skip to end
+			}
+			continue
+		case "repeat": // [repeat <c>[<n>]] token: repeat character <c> for <n> times.
+			if i+1 < len(parts) {
+				char := parts[i+1]
+				count := 1 // Default to 1 if no count specified
+
+				// Check if there's a count in the next part (e.g., [repeat = 15] or [repeat]=[15])
+				// The count can be specified as a number after the character
+				if i+2 < len(parts) {
+					if n, err := strconv.Atoi(parts[i+2]); err == nil {
+						count = n
+						i++
+					}
+				}
+
+				// If character is a single character, use it; otherwise use first character
+				if len(char) > 0 {
+					// Use first character of the string (handles multi-char inputs)
+					charToRepeat := char[0]
+					result += strings.Repeat(string(charToRepeat), count)
+				}
+				i++
+			}
 			continue
 		case "reset": // [reset] token: remove all styling.
 			*style = interpreter.renderer.NewStyle()
@@ -550,8 +1019,46 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				i += 2
 			}
 			continue
-		case "on": // [ON <color>] token: set background color only (expects color argument).
+		case "include": // [include] token: expects one argument.
 			if i+1 < len(parts) {
+				filename := parts[i+1]
+
+				// Prevent infinite recursion.
+				for _, inc := range includes {
+					if inc == filename {
+						result += fmt.Sprintf("[ERROR: %s included recursively]", filename)
+						return result, shouldFlush, skipLineAfter
+					}
+				}
+
+				if output, err := interpreter.ExecTemplate(filename, vars); err == nil {
+					result += output
+				} else {
+					result += fmt.Sprintf("[ERROR: %v]", err)
+				}
+				i++
+			}
+			continue
+		case "display": // [display <f>] token: display file without returning control.
+			if i+1 < len(parts) {
+				filename := parts[i+1]
+				// Set flag to display file and stop processing current file
+				interpreter.shouldDisplay = true
+				interpreter.displayFile = filename
+				i++
+			}
+			continue
+		case "link": // [link <f>] token: display file with return to caller.
+			if i+1 < len(parts) {
+				filename := parts[i+1]
+				// Set flag to link file - actual processing happens in interpret loop
+				interpreter.shouldLink = true
+				interpreter.linkFile = filename
+				i++
+			}
+			continue
+		case "bg": // [BG <c>] token: set background color only.
+			if i+1 < len(parts) && !shouldSkipOutput() {
 				bgToken := strings.ToLower(parts[i+1])
 				if strings.HasPrefix(bgToken, "#") {
 					if len(bgToken) == 7 {
@@ -568,23 +1075,57 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				i++
 			}
 			continue
-		case "include": // [include] token: expects one argument.
+		case "fg": // [FG <c>] token: set foreground color only.
+			if i+1 < len(parts) && !shouldSkipOutput() {
+				fgToken := strings.ToLower(parts[i+1])
+				if strings.HasPrefix(fgToken, "#") {
+					if len(fgToken) == 7 {
+						*style = style.Foreground(lipgloss.Color(fgToken))
+					} else {
+						// ANSI color code
+						if n, err := parseNumber(fgToken[1:]); err == nil {
+							*style = style.Foreground(lipgloss.Color(strconv.Itoa(n)))
+						}
+					}
+				} else if fg, ok := colorMapping[fgToken]; ok {
+					*style = style.Foreground(fg)
+				}
+				i++
+			}
+			continue
+		case "on": // [on exit <f>] or [on <color>] token.
+			if i+1 < len(parts) {
+				nextPart := strings.ToLower(parts[i+1])
+				if nextPart == "exit" && i+2 < len(parts) {
+					// [on exit <f>] - set exit file handler
+					filename := parts[i+2]
+					interpreter.onExitFile = filename
+					i += 2
+				} else {
+					// [on <color>] - existing background color logic
+					if !shouldSkipOutput() {
+						bgToken := strings.ToLower(parts[i+1])
+						if strings.HasPrefix(bgToken, "#") {
+							if len(bgToken) == 7 {
+								*style = style.Background(lipgloss.Color(bgToken))
+							} else {
+								// ANSI color code
+								if n, err := parseNumber(bgToken[1:]); err == nil {
+									*style = style.Background(lipgloss.Color(strconv.Itoa(n)))
+								}
+							}
+						} else if bg, ok := colorMapping[bgToken]; ok {
+							*style = style.Background(bg)
+						}
+					}
+					i++
+				}
+			}
+			continue
+		case "onexit": // [onexit <f>] token: synonym for [on exit <f>].
 			if i+1 < len(parts) {
 				filename := parts[i+1]
-
-				// Prevent infinite recursion.
-				for _, inc := range includes {
-					if inc == filename {
-						result += fmt.Sprintf("[ERROR: %s included recursively]", filename)
-						return result, shouldFlush
-					}
-				}
-
-				if output, err := interpreter.ExecTemplate(filename, vars); err == nil {
-					result += output
-				} else {
-					result += fmt.Sprintf("[ERROR: %v]", err)
-				}
+				interpreter.onExitFile = filename
 				i++
 			}
 			continue
@@ -671,12 +1212,228 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 				interpreter.menuResponse = ""
 			}
 			continue
+		case "readln": // [readln] or [readln <desc>] token: read a line of input from user.
+			if interpreter.reader == nil {
+				result += style.Render("[ERROR: no reader configured, use WithReader() option]")
+				continue
+			}
+
+			shouldFlush = true
+
+			// Read a line from the reader
+			scanner := bufio.NewScanner(interpreter.reader)
+			if scanner.Scan() {
+				interpreter.readlnResponse = scanner.Text()
+
+				// Store in questionnaire data if description provided
+				if i+1 < len(parts) {
+					desc := parts[i+1]
+					interpreter.questionnaireData = append(interpreter.questionnaireData, fmt.Sprintf("%s: %s", desc, interpreter.readlnResponse))
+					i++
+				} else {
+					interpreter.questionnaireData = append(interpreter.questionnaireData, interpreter.readlnResponse)
+				}
+			} else {
+				interpreter.readlnResponse = ""
+				if !interpreter.answerOptional {
+					// If answer required and nothing entered, add empty entry
+					if i+1 < len(parts) {
+						desc := parts[i+1]
+						interpreter.questionnaireData = append(interpreter.questionnaireData, fmt.Sprintf("%s: ", desc))
+						i++
+					}
+				}
+			}
+			continue
+		case "enter": // [enter] token: wait for Enter key press.
+			if interpreter.reader == nil {
+				result += style.Render("[ERROR: no reader configured, use WithReader() option]")
+				continue
+			}
+
+			shouldFlush = true
+
+			// Display prompt and wait for Enter
+			prompt := style.Render("Press ENTER to continue")
+			result += prompt
+
+			// Read until newline
+			buf := make([]byte, 1)
+			for {
+				n, err := interpreter.reader.Read(buf)
+				if err != nil || n == 0 {
+					break
+				}
+				if buf[0] == '\n' || buf[0] == '\r' {
+					// Handle \r\n sequence
+					if buf[0] == '\r' {
+						// Peek at next byte
+						peek := make([]byte, 1)
+						if n2, _ := interpreter.reader.Read(peek); n2 > 0 && peek[0] != '\n' {
+							// Put it back somehow? Actually we can't unread, so just continue
+						}
+					}
+					break
+				}
+			}
+			continue
+		case "choice": // [choice <c>] token: conditional - display rest of line only if response matches.
+			if i+1 < len(parts) {
+				expectedChar := strings.ToLower(parts[i+1])
+				// Check if menu response or readln response matches
+				response := ""
+				if interpreter.menuResponse != "" {
+					response = interpreter.menuResponse
+				} else if interpreter.readlnResponse != "" {
+					// For readln, check if first character matches (case-insensitive)
+					if len(interpreter.readlnResponse) > 0 {
+						response = strings.ToLower(string(interpreter.readlnResponse[0]))
+					}
+				}
+
+				if strings.ToLower(response) != expectedChar {
+					// Condition not met - skip rest of line
+					skipLineAfter = true
+				}
+				i++
+			}
+			continue
+		case "ifentered": // [ifentered <s>] token: conditional - display rest of line only if [readln] response matches exactly.
+			if i+1 < len(parts) {
+				expectedString := strings.ToLower(parts[i+1])
+				// Check if readln response matches exactly (case-insensitive)
+				response := ""
+				if interpreter.readlnResponse != "" {
+					response = strings.ToLower(interpreter.readlnResponse)
+				}
+
+				if response != expectedString {
+					// Condition not met - skip rest of line
+					skipLineAfter = true
+				}
+				i++
+			}
+			continue
+		case "top": // [top] token: jump to top of current file.
+			interpreter.shouldGotoTop = true
+			continue
+		case "goto": // [goto <label>] token: jump to label.
+			if i+1 < len(parts) {
+				labelName := strings.ToLower(parts[i+1])
+				interpreter.gotoTarget = labelName
+				i++
+			}
+			continue
+		case "jump": // [jump <label>] token: synonym for [goto].
+			if i+1 < len(parts) {
+				labelName := strings.ToLower(parts[i+1])
+				interpreter.gotoTarget = labelName
+				i++
+			}
+			continue
+		case "quit": // [quit] token: exit current file.
+			interpreter.shouldQuit = true
+			continue
+		case "exit": // [exit] token: exit all files.
+			interpreter.shouldExit = true
+			continue
+		case "label": // [label <name>] token: define a label (position marker).
+			// Labels are already parsed by parseLabels(), so we just ignore this token
+			// during processing (it doesn't output anything)
+			if i+1 < len(parts) {
+				i++
+			}
+			continue
+		case "ansopt": // [ansopt] token: make answers optional.
+			interpreter.answerOptional = true
+			continue
+		case "ansreq": // [ansreq] token: make answers required.
+			interpreter.answerOptional = false
+			continue
+		case "store": // [store] or [store <desc>] token: store menu response in questionnaire.
+			if interpreter.menuResponse != "" {
+				if i+1 < len(parts) {
+					desc := parts[i+1]
+					interpreter.questionnaireData = append(interpreter.questionnaireData, fmt.Sprintf("%s: %s", desc, interpreter.menuResponse))
+					i++
+				} else {
+					interpreter.questionnaireData = append(interpreter.questionnaireData, interpreter.menuResponse)
+				}
+			}
+			continue
+		case "write": // [write <text>] token: write line to questionnaire data.
+			if i+1 < len(parts) {
+				text := parts[i+1]
+				interpreter.questionnaireData = append(interpreter.questionnaireData, text)
+				i++
+			}
+			continue
+		case "color": // [color] token: display following text only if ANSI enabled.
+		case "colour": // [colour] token: Canadian spelling of [color].
+			// Check if ANSI is supported
+			hasColor := interpreter.output.ColorProfile() != termenv.Ascii
+			// Push false if color is NOT supported (skip output), true if color IS supported (show output)
+			interpreter.colorConditionStack = append(interpreter.colorConditionStack, !hasColor)
+			continue
+		case "nocolor": // [nocolor] token: display following text only if ANSI disabled.
+		case "nocolour": // [nocolour] token: Canadian spelling of [nocolor].
+			// Check if ANSI is supported
+			hasColor := interpreter.output.ColorProfile() != termenv.Ascii
+			// Push true if color IS supported (skip output), false if color is NOT supported (show output)
+			interpreter.colorConditionStack = append(interpreter.colorConditionStack, hasColor)
+			continue
+		case "endcolor": // [endcolor] token: end color-conditional block.
+		case "endcolour": // [endcolour] token: Canadian spelling of [endcolor].
+			// Pop the color condition stack
+			if len(interpreter.colorConditionStack) > 0 {
+				interpreter.colorConditionStack = interpreter.colorConditionStack[:len(interpreter.colorConditionStack)-1]
+			}
+			continue
+		case "copy": // [copy <f>] token: copy file contents directly to output (no parsing).
+			if i+1 < len(parts) && !shouldSkipOutput() {
+				filename := parts[i+1]
+				data := path.Join(interpreter.templateRoot, filename)
+
+				if fileData, err := os.ReadFile(data); err == nil {
+					result += string(fileData)
+				} else {
+					result += fmt.Sprintf("[ERROR: %v]", err)
+				}
+				i++
+			}
+			continue
+		case "more": // [more] token: display "More [Y,n,=]?" prompt.
+			if interpreter.reader == nil {
+				result += style.Render("[ERROR: no reader configured, use WithReader() option]")
+				continue
+			}
+
+			shouldFlush = true
+			// Note: handleMorePrompt will be called after output is flushed
+			// Store that we need to handle more prompt
+			interpreter.shouldHandleMore = true
+			continue
+		case "moreon": // [moreon] token: enable automatic more prompts.
+			interpreter.moreEnabled = true
+			continue
+		case "moreoff": // [moreoff] token: disable automatic more prompts.
+			interpreter.moreEnabled = false
+			continue
 		}
+
+		// Check for [/labelname] format (labels starting with /)
+		if strings.HasPrefix(part, "/") && len(part) > 1 {
+			// This is a label definition, already parsed by parseLabels()
+			// Just ignore it during processing
+			continue
+		}
+
+		// Continue with other token processing
 		// Colors can be specified one of three ways:
 		// 1. By name (e.g., red, green, blue)
 		// 2. By hex code (e.g., #ff0000, #00ff00, #0000ff)
 		// 3. By ANSI color code, as a number (e.g., #63)
-		if isColorToken(part) {
+		if isColorToken(part) && !shouldSkipOutput() {
 			tokenLower := strings.ToLower(part)
 			if strings.HasPrefix(tokenLower, "#") {
 				if len(tokenLower) == 7 {
@@ -712,7 +1469,9 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 		if strings.HasPrefix(part, "U+") && len(part) > 2 {
 			if r, err := decodeUTF8Token(part[2:]); err == nil {
 				text := string(r)
-				result += style.Render(text)
+				if !shouldSkipOutput() {
+					result += style.Render(text)
+				}
 				// If capturing option text, capture the plain text
 				if interpreter.capturingOption {
 					interpreter.optionTextBuffer.WriteString(text)
@@ -723,7 +1482,9 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			// Handle ASCII token from a number.
 			if n, err := parseNumber(part); err == nil {
 				text := string(rune(n))
-				result += style.Render(text)
+				if !shouldSkipOutput() {
+					result += style.Render(text)
+				}
 				// If capturing option text, capture the plain text
 				if interpreter.capturingOption {
 					interpreter.optionTextBuffer.WriteString(text)
@@ -735,7 +1496,9 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 		if vars != nil {
 			if val, ok := vars[part]; ok {
 				text := fmt.Sprintf("%v", val)
-				result += style.Render(text)
+				if !shouldSkipOutput() {
+					result += style.Render(text)
+				}
 				// If capturing option text, capture the plain text
 				if interpreter.capturingOption {
 					interpreter.optionTextBuffer.WriteString(text)
@@ -749,11 +1512,15 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			if token.ArgCount > 0 && i+token.ArgCount < len(parts) {
 				args := parts[i+1 : i+1+token.ArgCount]
 				text = token.Func(args)
-				result += style.Render(text)
+				if !shouldSkipOutput() {
+					result += style.Render(text)
+				}
 				i += token.ArgCount
 			} else {
 				text = token.Func([]string{})
-				result += style.Render(text)
+				if !shouldSkipOutput() {
+					result += style.Render(text)
+				}
 			}
 			// If capturing option text, capture the plain text
 			if interpreter.capturingOption {
@@ -762,9 +1529,11 @@ func (interpreter *Interpreter) processToken(content string, style *lipgloss.Sty
 			continue
 		}
 		// If token is unrecognized, emit an error message inline.
-		result += style.Render(fmt.Sprintf("[UNRECOGNIZED TOKEN \"%s\"]", part))
+		if !shouldSkipOutput() {
+			result += style.Render(fmt.Sprintf("[UNRECOGNIZED TOKEN \"%s\"]", part))
+		}
 	}
-	return result, shouldFlush
+	return result, shouldFlush, skipLineAfter
 }
 
 // parseFieldsWithQuotes parses a string into fields, respecting quoted arguments.
@@ -903,4 +1672,125 @@ func convertFromCharset(input string, charset string) string {
 		b.WriteString(fmt.Sprintf("[ERROR: unsupported charset %s]", charset))
 	}
 	return b.String()
+}
+
+// processDisplayFile loads and processes a file for [display] token.
+// This is used by both [display] and [on exit] handlers.
+func (interpreter *Interpreter) processDisplayFile(filename string, vars map[string]any, includes []string) string {
+	templatePath := path.Join(interpreter.templateRoot, filename)
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Sprintf("[ERROR: %v]", err)
+	}
+
+	// Prevent infinite recursion
+	for _, inc := range includes {
+		if inc == filename {
+			return fmt.Sprintf("[ERROR: %s included recursively]", filename)
+		}
+	}
+
+	// Add to includes chain
+	newIncludes := append(includes, filename)
+
+	return interpreter.interpret(string(data), vars, newIncludes)
+}
+
+// processLinkFile loads and processes a file for [link] token.
+// The file is processed and control returns to the caller.
+func (interpreter *Interpreter) processLinkFile(filename string, vars map[string]any, includes []string) string {
+	return interpreter.processDisplayFile(filename, vars, includes)
+}
+
+// getTerminalHeight attempts to get the terminal height in lines.
+// Returns 24 as default if unable to determine.
+func (interpreter *Interpreter) getTerminalHeight() int {
+	// Try to get terminal size from termenv
+	if interpreter.output != nil {
+		// termenv doesn't have direct height access, but we can check environment
+		// For SSH sessions, we can try to get from session
+		if interpreter.session != nil {
+			sshPty, _, _ := interpreter.session.Pty()
+			if sshPty.Window.Height > 0 {
+				return int(sshPty.Window.Height)
+			}
+		}
+	}
+	// Default to 24 lines (standard terminal size)
+	return 24
+}
+
+// checkAutoMore checks if we should automatically prompt for more when enabled.
+// Returns true if we should prompt, false otherwise.
+func (interpreter *Interpreter) checkAutoMore() bool {
+	if !interpreter.moreEnabled {
+		return false
+	}
+
+	// Prompt if we're within 2 lines of the bottom
+	// (leave room for the prompt itself)
+	if interpreter.terminalHeight > 0 && interpreter.currentLine >= interpreter.terminalHeight-2 {
+		// Don't prompt again on the same line
+		if interpreter.currentLine > interpreter.lastMoreLine {
+			return true
+		}
+	}
+	return false
+}
+
+// handleMorePrompt displays the "More [Y,n,=]?" prompt and waits for user input.
+// Returns the response character (Y, n, or =) or empty string.
+func (interpreter *Interpreter) handleMorePrompt() string {
+	if interpreter.reader == nil {
+		return ""
+	}
+
+	// Display prompt
+	prompt := "More [Y,n,=]? "
+	if interpreter.session != nil {
+		wish.WriteString(interpreter.session, prompt)
+	} else {
+		io.WriteString(interpreter.output, prompt)
+	}
+
+	// Read a single character
+	buf := make([]byte, 1)
+	n, err := interpreter.reader.Read(buf)
+	if err != nil || n == 0 {
+		return ""
+	}
+
+	inputChar := strings.ToLower(string(buf[0]))
+
+	// Handle valid responses
+	if inputChar == "y" || inputChar == "n" || inputChar == "=" {
+		interpreter.moreResponse = inputChar
+		interpreter.lastMoreLine = interpreter.currentLine
+
+		// Handle responses:
+		// Y = continue (clear screen and reset line counter)
+		// n = quit/stop
+		// = = show one more line
+		if inputChar == "y" {
+			// Clear screen and reset
+			if interpreter.session != nil {
+				wish.WriteString(interpreter.session, ansi.EraseDisplay(2)+ansi.CursorPosition(1, 1))
+			} else {
+				io.WriteString(interpreter.output, ansi.EraseDisplay(2)+ansi.CursorPosition(1, 1))
+			}
+			interpreter.currentLine = 0
+			interpreter.lastMoreLine = 0
+		} else if inputChar == "n" {
+			// Quit - set flag to stop processing
+			interpreter.shouldQuit = true
+		}
+		// = just continues, no special action needed
+
+		return inputChar
+	}
+
+	// Invalid input, treat as 'n' (quit)
+	interpreter.moreResponse = "n"
+	interpreter.shouldQuit = true
+	return "n"
 }
